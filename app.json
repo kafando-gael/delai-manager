@@ -2,14 +2,45 @@
   "expo": {
     "name": "Gestionnaire de Délai",
     "slug": "gestionnaire-de-delai",
+    "owner": "kafandogael",
     "version": "0.0.1",
     "orientation": "portrait",
     "icon": "./assets/app-logo.png",
     "splash": {
       "image": "./assets/app-logo.png",
       "resizeMode": "contain",
-      "backgroundColor": "#f4f7f5"
+      "backgroundColor": "#F8FAFC"
     },
-    "platforms": ["ios", "android"]
+    "scheme": "delai-manager",
+    "extra": {
+      "apiUrl": "https://delai-manager-api.onrender.com/api",
+      "eas": {
+        "projectId": "7e1d2e12-b8fa-4b92-8e0f-6ada150b79fb"
+      }
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "color": "#2563EB"
+        }
+      ]
+    ],
+    "ios": {
+      "bundleIdentifier": "com.delaimanager.app",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSUserNotificationsUsageDescription": "Recevez des rappels pour vos échéances importantes (passeport, assurance, loyer...).",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.delaimanager.app",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/app-logo.png",
+        "backgroundColor": "#F8FAFC"
+      }
+    }
   }
 }

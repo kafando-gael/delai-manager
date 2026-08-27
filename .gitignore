@@ -1,3 +1,11 @@
 .expo/
 node_modules/
 dist/
+server/node_modules/
+server/data/
+server/.env
+credentials.json
+android.keystore
+.DS_Store
+.idea/
+client-builds/
