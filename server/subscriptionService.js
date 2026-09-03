@@ -2,18 +2,52 @@ import {config} from './config.js';
 import {getPaymentStatus} from './sunrisePayClient.js';
 import {
   addOneYear,
+  getLatestPaymentForDevice,
   getPaymentRecord,
   getSubscription,
   isSubscriptionActive,
   markPaymentCompleted,
   saveSubscription,
+  updatePaymentUrl,
 } from './subscriptionStore.js';
 
-function checkoutUrlFor(paymentId, storedUrl) {
-  if (storedUrl) {
-    return storedUrl;
+function checkoutPayload(paymentId, paymentUrl) {
+  return {
+    paymentUrl,
+    paymentId,
+    amount: config.annualFcfa,
+    reused: true,
+  };
+}
+
+export async function reuseExistingCheckout(deviceId) {
+  const latest = await getLatestPaymentForDevice(deviceId);
+  if (!latest || latest.status === 'completed') {
+    return null;
   }
-  return `${config.sunrisePayUrl}/pay/${encodeURIComponent(paymentId)}`;
+
+  if (latest.paymentUrl) {
+    return checkoutPayload(latest.sunrisePaymentId, latest.paymentUrl);
+  }
+
+  const remote = await getPaymentStatus(latest.sunrisePaymentId);
+  if (remote.status === 'completed') {
+    await activateSubscription(deviceId, latest.sunrisePaymentId);
+    const error = new Error('Paiement deja complete');
+    error.code = 'PAYMENT_ALREADY_COMPLETED';
+    throw error;
+  }
+
+  const paymentUrl = remote.paymentUrl || null;
+  if (paymentUrl) {
+    await updatePaymentUrl(latest.sunrisePaymentId, paymentUrl);
+    return checkoutPayload(latest.sunrisePaymentId, paymentUrl);
+  }
+
+  const waitError = new Error('Paiement temporairement indisponible. Reessaie dans un instant.');
+  waitError.code = 'SUNRISE_TIMEOUT';
+  waitError.status = 503;
+  throw waitError;
 }
 
 export async function activateSubscription(deviceId, paymentId, {verifyWithSunrise = false} = {}) {
@@ -62,29 +96,4 @@ export async function activateSubscription(deviceId, paymentId, {verifyWithSunri
     pendingPaymentId: null,
     lastPaymentId: paymentId,
   });
-}
-
-export async function resumePendingPayment(deviceId, pendingPaymentId) {
-  const paymentRecord = await getPaymentRecord(pendingPaymentId);
-  if (!paymentRecord || paymentRecord.deviceId !== deviceId) {
-    return null;
-  }
-
-  if (paymentRecord.status === 'completed') {
-    await activateSubscription(deviceId, pendingPaymentId);
-    const error = new Error('Paiement deja complete');
-    error.code = 'PAYMENT_ALREADY_COMPLETED';
-    throw error;
-  }
-
-  if (paymentRecord.status === 'failed' || paymentRecord.status === 'cancelled') {
-    return null;
-  }
-
-  return {
-    paymentUrl: checkoutUrlFor(pendingPaymentId, paymentRecord.paymentUrl),
-    paymentId: pendingPaymentId,
-    amount: config.annualFcfa,
-    reused: true,
-  };
 }

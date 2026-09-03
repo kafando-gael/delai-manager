@@ -7,7 +7,7 @@ import {config} from './config.js';
 import {errorHandler} from './middleware/errorHandler.js';
 import {verifyWebhookSecret} from './middleware/webhookAuth.js';
 import {createPayment, getPaymentStatus} from './sunrisePayClient.js';
-import {activateSubscription, resumePendingPayment} from './subscriptionService.js';
+import {activateSubscription, reuseExistingCheckout} from './subscriptionService.js';
 import {
   checkDatabaseConnection,
   clearPendingSubscription,
@@ -155,19 +155,16 @@ app.post('/api/subscription/pay', async (req, res) => {
       return res.status(400).json({error: 'Abonnement deja actif'});
     }
 
-    if (current?.status === 'pending_payment' && current.pendingPaymentId) {
-      try {
-        const resumed = await resumePendingPayment(deviceId, current.pendingPaymentId);
-        if (resumed) {
-          return res.json(resumed);
-        }
-        await clearPendingSubscription(deviceId);
-      } catch (error) {
-        if (error.code === 'PAYMENT_ALREADY_COMPLETED') {
-          return res.json(await buildStatus(deviceId));
-        }
-        console.error('[subscription/pay] resume', error.message);
+    try {
+      const reused = await reuseExistingCheckout(deviceId);
+      if (reused) {
+        return res.json(reused);
       }
+    } catch (error) {
+      if (error.code === 'PAYMENT_ALREADY_COMPLETED') {
+        return res.json(await buildStatus(deviceId));
+      }
+      throw error;
     }
 
     const client = await upsertClient({

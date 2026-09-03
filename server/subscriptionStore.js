@@ -163,6 +163,39 @@ function mapPayment(row) {
   };
 }
 
+export async function getLatestPaymentForDevice(deviceId) {
+  const supabase = getSupabase();
+
+  const {data, error} = await supabase
+    .from('payments')
+    .select('*')
+    .eq('device_id', deviceId)
+    .order('created_at', {ascending: false})
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return mapPayment(data);
+}
+
+export async function updatePaymentUrl(sunrisePaymentId, paymentUrl) {
+  if (!paymentUrl) {
+    return;
+  }
+  const supabase = getSupabase();
+  const {error} = await supabase
+    .from('payments')
+    .update({payment_url: paymentUrl})
+    .eq('sunrise_payment_id', sunrisePaymentId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
 export async function getPaymentRecord(sunrisePaymentId) {
   const supabase = getSupabase();
 

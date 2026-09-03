@@ -1,6 +1,9 @@
 import {config} from './config.js';
 
 const SUNRISE_TIMEOUT_MS = 25000;
+const SUNRISE_COOLDOWN_MS = 10 * 60 * 1000;
+
+let blockedUntil = 0;
 
 function headers() {
   return {
@@ -21,20 +24,31 @@ async function parseBody(response) {
   }
 }
 
+function rateLimitError() {
+  const error = new Error('Trop de tentatives de paiement. Reessaie dans quelques minutes.');
+  error.status = 429;
+  error.code = 'RATE_LIMITED';
+  return error;
+}
+
 function sunriseError(response, data, fallback) {
   const raw = data.error || data.message || fallback;
   const isRateLimited = response.status === 429 || /too many requests/i.test(String(raw));
-  const error = new Error(
-    isRateLimited
-      ? 'Trop de tentatives de paiement. Reessaie dans quelques minutes.'
-      : raw,
-  );
+  if (isRateLimited) {
+    blockedUntil = Date.now() + SUNRISE_COOLDOWN_MS;
+    return rateLimitError();
+  }
+  const error = new Error(raw);
   error.status = response.status;
-  error.code = isRateLimited ? 'RATE_LIMITED' : 'SUNRISE_ERROR';
+  error.code = 'SUNRISE_ERROR';
   return error;
 }
 
 async function sunriseFetch(url, options = {}) {
+  if (Date.now() < blockedUntil) {
+    throw rateLimitError();
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SUNRISE_TIMEOUT_MS);
 
