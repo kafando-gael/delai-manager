@@ -8,31 +8,42 @@ function resolveApiUrl() {
 }
 
 const API_URL = resolveApiUrl();
-const REQUEST_TIMEOUT_MS = 4000;
+const REQUEST_TIMEOUT_MS = 25000;
+const PAY_TIMEOUT_MS = 45000;
 
 export const TRIAL_DURATION_MONTHS = 1;
 export const TRIAL_DEADLINE_LIMIT = 4;
 
-async function request(path, options = {}) {
+function errorFromStatus(status, data) {
+  if (status === 429) {
+    return data.error || 'Trop de requetes. Reessaie dans quelques minutes.';
+  }
+  if (status >= 500) {
+    return data.error || 'Serveur indisponible. Reessaie dans un instant.';
+  }
+  return data.error || 'Erreur reseau';
+}
+
+async function request(path, {timeoutMs = REQUEST_TIMEOUT_MS, headers, ...options} = {}) {
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timeoutId = controller
-    ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+    ? setTimeout(() => controller.abort(), timeoutMs)
     : null;
 
   try {
     const response = await fetch(`${API_URL}${path}`, {
-      headers: {'Content-Type': 'application/json', ...(options.headers || {})},
       ...options,
+      headers: {'Content-Type': 'application/json', ...(headers || {})},
       signal: controller?.signal,
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(data.error || 'Erreur reseau');
+      throw new Error(errorFromStatus(response.status, data));
     }
     return data;
   } catch (error) {
     if (error?.name === 'AbortError') {
-      throw new Error('Network request timed out');
+      throw new Error('Le serveur met trop de temps a repondre. Reessaie.');
     }
     throw error;
   } finally {
@@ -42,8 +53,14 @@ async function request(path, options = {}) {
   }
 }
 
+let syncClientInFlight = null;
+
 export async function syncClientProfile({deviceId, name, email, phone, usageReason, ageRange}) {
-  return request('/clients/sync', {
+  if (syncClientInFlight) {
+    return syncClientInFlight;
+  }
+
+  syncClientInFlight = request('/clients/sync', {
     method: 'POST',
     body: JSON.stringify({
       deviceId,
@@ -53,7 +70,11 @@ export async function syncClientProfile({deviceId, name, email, phone, usageReas
       usageReason,
       ageRange,
     }),
+  }).finally(() => {
+    syncClientInFlight = null;
   });
+
+  return syncClientInFlight;
 }
 
 export async function fetchSubscriptionStatus(deviceId) {
@@ -70,6 +91,7 @@ export async function startSubscriptionPayment({
 }) {
   return request('/subscription/pay', {
     method: 'POST',
+    timeoutMs: PAY_TIMEOUT_MS,
     body: JSON.stringify({
       deviceId,
       customerEmail,
@@ -84,6 +106,7 @@ export async function startSubscriptionPayment({
 export async function confirmSubscriptionPayment(deviceId, paymentId) {
   return request('/subscription/confirm', {
     method: 'POST',
+    timeoutMs: PAY_TIMEOUT_MS,
     body: JSON.stringify({deviceId, paymentId}),
   });
 }

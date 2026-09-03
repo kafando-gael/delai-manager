@@ -30,19 +30,23 @@ const corsOptions = config.isProduction && config.corsOrigins.length > 0
   : {};
 app.use(cors(corsOptions));
 
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: config.isProduction ? 120 : 1000,
+const rateLimitJson = error => ({
+  statusCode: 429,
+  message: {error},
   standardHeaders: true,
   legacyHeaders: false,
 });
 
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: config.isProduction ? 300 : 1000,
+  ...rateLimitJson('Trop de requetes. Reessaie dans quelques minutes.'),
+});
+
 const payLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: config.isProduction ? 8 : 100,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {error: 'Trop de tentatives de paiement. Reessaie plus tard.'},
+  max: config.isProduction ? 20 : 100,
+  ...rateLimitJson('Trop de tentatives de paiement. Reessaie plus tard.'),
 });
 
 app.use('/api', apiLimiter);
@@ -167,6 +171,15 @@ app.post('/api/subscription/pay', payLimiter, async (req, res) => {
         if (error.code === 'PAYMENT_ALREADY_COMPLETED') {
           return res.json(await buildStatus(deviceId));
         }
+        if (error.code === 'RATE_LIMITED' || error.status === 429) {
+          return res.status(429).json({
+            error: 'Trop de tentatives de paiement. Reessaie dans quelques minutes.',
+          });
+        }
+        console.error('[subscription/pay] resume', error.message);
+        return res.status(503).json({
+          error: 'Paiement temporairement indisponible. Reessaie dans un instant.',
+        });
       }
     }
 
@@ -217,6 +230,16 @@ app.post('/api/subscription/pay', payLimiter, async (req, res) => {
     });
   } catch (error) {
     console.error('[subscription/pay]', error.message);
+    if (error.code === 'RATE_LIMITED' || error.status === 429) {
+      return res.status(429).json({
+        error: 'Trop de tentatives de paiement. Reessaie dans quelques minutes.',
+      });
+    }
+    if (error.code === 'SUNRISE_TIMEOUT' || error.status === 503) {
+      return res.status(503).json({
+        error: 'Paiement temporairement indisponible. Reessaie dans un instant.',
+      });
+    }
     return res.status(500).json({error: config.isProduction ? 'Erreur interne' : error.message});
   }
 });

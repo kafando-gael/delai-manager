@@ -26,6 +26,10 @@ import {
   requestNotificationPermissions,
   scheduleDeadlineNotifications,
   syncAllDeadlineNotifications,
+  NOTIF_ACTIONS,
+  alertOptionsFromSettings,
+  snoozeDeadlineNotification,
+  subscribeNotificationActions,
 } from './notifications';
 import {
   TRIAL_DEADLINE_LIMIT,
@@ -444,6 +448,7 @@ export default function App() {
     defaultReminderMinute: 0,
     defaultReminderOffsets: [...DEFAULT_REMINDER_OFFSETS],
     language: 'fr',
+    strongAlertsEnabled: true,
   });
   const [deadlines, setDeadlines] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -474,6 +479,7 @@ export default function App() {
   const [paymentUrl, setPaymentUrl] = useState(null);
   const [pendingPaymentId, setPendingPaymentId] = useState(null);
   const [paymentLoading, setPaymentLoading] = useState(false);
+  const ctxRef = useRef({});
 
   useEffect(() => {
     let mounted = true;
@@ -538,7 +544,14 @@ export default function App() {
         await SplashScreen.hideAsync();
         if (loaded?.notificationsEnabled) {
           requestNotificationPermissions()
-            .then(() => syncAllDeadlineNotifications(loaded.deadlines, true))
+            .then(async granted => {
+              if (!granted) {
+                return;
+              }
+              const alerts = alertOptionsFromSettings(loaded.settings);
+              await configureNotifications(alerts.language);
+              await syncAllDeadlineNotifications(loaded.deadlines, true, alerts);
+            })
             .catch(() => {});
         }
       }
@@ -651,13 +664,18 @@ export default function App() {
       defaultReminderMinute: settingsRow?.default_reminder_minute ?? 0,
       defaultReminderOffsets: parseReminderOffsets(settingsRow?.default_reminder_offsets, null),
       language: settingsRow?.language === 'en' ? 'en' : 'fr',
+      strongAlertsEnabled: settingsRow?.strong_alerts !== 0,
     };
     setSettings(nextSettings);
     setDeadlines(mappedDeadlines);
     setSubscription(mergeSubscriptionWithTrial(null, nextTrialStartedAt));
-    // Don't block app open on API — sync in background with a short timeout.
+    // Don't block app open on API — sync in background.
     syncSubscription(deviceIdValue, nextTrialStartedAt).catch(() => {});
-    return {deadlines: mappedDeadlines, notificationsEnabled: nextSettings.notificationsEnabled};
+    return {
+      deadlines: mappedDeadlines,
+      notificationsEnabled: nextSettings.notificationsEnabled,
+      settings: nextSettings,
+    };
   }
 
   const sortedDeadlines = useMemo(
@@ -813,7 +831,7 @@ export default function App() {
           reminderOffsets: offsets,
           reminderHour: record.reminderHour,
           reminderMinute: record.reminderMinute,
-        });
+        }, alertOptionsFromSettings(settings));
       }
     }
 
@@ -828,7 +846,7 @@ export default function App() {
     await db.runAsync('UPDATE deadlines SET due_date = ? WHERE id = ?', renewedDate, deadline.id);
     const renewed = {...deadline, dueDate: renewedDate};
     if (settings.notificationsEnabled) {
-      await scheduleDeadlineNotifications(renewed);
+      await scheduleDeadlineNotifications(renewed, alertOptionsFromSettings(settings));
     }
     await loadData();
     setSelectedDeadline(renewed);
@@ -847,7 +865,7 @@ export default function App() {
       `UPDATE app_settings
        SET critical_days = ?, watch_days = ?, notifications_enabled = ?,
            default_reminder_hour = ?, default_reminder_minute = ?, default_reminder_offsets = ?,
-           language = ?
+           language = ?, strong_alerts = ?
        WHERE id = 1`,
       next.criticalDays,
       next.watchDays,
@@ -856,19 +874,79 @@ export default function App() {
       next.defaultReminderMinute,
       JSON.stringify(next.defaultReminderOffsets),
       next.language === 'en' ? 'en' : 'fr',
+      next.strongAlertsEnabled === false ? 0 : 1,
     );
     setSettings(next);
-    if ('notificationsEnabled' in patch) {
+    const shouldResync =
+      'notificationsEnabled' in patch
+      || 'strongAlertsEnabled' in patch
+      || 'criticalDays' in patch
+      || 'language' in patch;
+    if (shouldResync) {
+      await configureNotifications(next.language);
       if (next.notificationsEnabled) {
         const granted = await requestNotificationPermissions();
         if (granted) {
-          await syncAllDeadlineNotifications(deadlines, true);
+          await syncAllDeadlineNotifications(deadlines, true, alertOptionsFromSettings(next));
         }
-      } else {
+      } else if ('notificationsEnabled' in patch) {
         await syncAllDeadlineNotifications(deadlines, false);
       }
     }
   }
+
+  ctxRef.current = {db, settings, loadData};
+
+  useEffect(() => {
+    if (!ready) {
+      return undefined;
+    }
+    return subscribeNotificationActions(async (action, data) => {
+      const {db: database, settings: currentSettings, loadData: reload} = ctxRef.current;
+      const deadlineId = data?.deadlineId;
+      if (!database || !deadlineId) {
+        return;
+      }
+      const row = await database.getFirstAsync('SELECT * FROM deadlines WHERE id = ?', deadlineId);
+      if (!row) {
+        return;
+      }
+      const deadline = mapDeadline(row);
+      const alerts = alertOptionsFromSettings(currentSettings);
+
+      if (action === NOTIF_ACTIONS.SNOOZE) {
+        await snoozeDeadlineNotification(deadline, 10, alerts);
+        return;
+      }
+      if (action === NOTIF_ACTIONS.POSTPONE) {
+        const date = parseDate(deadline.dueDate);
+        if (!date) {
+          return;
+        }
+        date.setDate(date.getDate() + 1);
+        const nextDue = toDateKey(date.getFullYear(), date.getMonth(), date.getDate());
+        await database.runAsync('UPDATE deadlines SET due_date = ? WHERE id = ?', nextDue, deadline.id);
+        if (currentSettings.notificationsEnabled) {
+          await scheduleDeadlineNotifications({...deadline, dueDate: nextDue}, alerts);
+        }
+        await reload();
+        return;
+      }
+      if (action === NOTIF_ACTIONS.MARK_DONE) {
+        if (deadline.repetition !== 'none') {
+          const renewedDate = nextDate(deadline.dueDate, deadline.repetition);
+          await database.runAsync('UPDATE deadlines SET due_date = ? WHERE id = ?', renewedDate, deadline.id);
+          if (currentSettings.notificationsEnabled) {
+            await scheduleDeadlineNotifications({...deadline, dueDate: renewedDate}, alerts);
+          }
+        } else {
+          await cancelDeadlineNotifications(deadline.id);
+          await database.runAsync('DELETE FROM deadlines WHERE id = ?', deadline.id);
+        }
+        await reload();
+      }
+    });
+  }, [ready]);
 
   function openDeadline(item) {
     setSelectedDeadline(item);
@@ -1693,6 +1771,11 @@ function SettingsScreen({
           value={settings.notificationsEnabled}
           onChange={value => updateSettings({notificationsEnabled: value})}
         />
+        <ToggleRow
+          label={t('strongAlerts')}
+          value={settings.strongAlertsEnabled !== false}
+          onChange={value => updateSettings({strongAlertsEnabled: value})}
+        />
 
         <ReminderPlanner
           compact
@@ -2006,6 +2089,9 @@ async function ensureAppSettingsColumns(database) {
   }
   if (!names.has('language')) {
     await database.execAsync(`ALTER TABLE app_settings ADD COLUMN language TEXT NOT NULL DEFAULT 'fr'`);
+  }
+  if (!names.has('strong_alerts')) {
+    await database.execAsync(`ALTER TABLE app_settings ADD COLUMN strong_alerts INTEGER NOT NULL DEFAULT 1`);
   }
 }
 
