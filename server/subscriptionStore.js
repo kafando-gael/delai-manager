@@ -122,7 +122,7 @@ export async function saveSubscription(deviceId, patch, clientId = null) {
   return mapSubscription(data);
 }
 
-export async function createPaymentRecord({deviceId, clientId, sunrisePaymentId, amount}) {
+export async function createPaymentRecord({deviceId, clientId, sunrisePaymentId, amount, paymentUrl}) {
   const supabase = getSupabase();
 
   const {data, error} = await supabase
@@ -133,6 +133,7 @@ export async function createPaymentRecord({deviceId, clientId, sunrisePaymentId,
       sunrise_payment_id: sunrisePaymentId,
       amount,
       status: 'pending',
+      payment_url: paymentUrl || null,
     })
     .select('id')
     .single();
@@ -156,6 +157,7 @@ function mapPayment(row) {
     sunrisePaymentId: row.sunrise_payment_id,
     amount: row.amount,
     status: row.status,
+    paymentUrl: row.payment_url || null,
     createdAt: row.created_at,
     completedAt: row.completed_at,
   };

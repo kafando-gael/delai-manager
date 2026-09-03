@@ -43,12 +43,6 @@ const apiLimiter = rateLimit({
   ...rateLimitJson('Trop de requetes. Reessaie dans quelques minutes.'),
 });
 
-const payLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: config.isProduction ? 20 : 100,
-  ...rateLimitJson('Trop de tentatives de paiement. Reessaie plus tard.'),
-});
-
 app.use('/api', apiLimiter);
 
 function publicBaseUrl() {
@@ -135,7 +129,7 @@ app.get('/api/subscription/status', async (req, res) => {
   }
 });
 
-app.post('/api/subscription/pay', payLimiter, async (req, res) => {
+app.post('/api/subscription/pay', async (req, res) => {
   try {
     const deviceId = String(req.body.deviceId || '').trim();
     const customerEmail = String(req.body.customerEmail || '').trim();
@@ -167,19 +161,12 @@ app.post('/api/subscription/pay', payLimiter, async (req, res) => {
         if (resumed) {
           return res.json(resumed);
         }
+        await clearPendingSubscription(deviceId);
       } catch (error) {
         if (error.code === 'PAYMENT_ALREADY_COMPLETED') {
           return res.json(await buildStatus(deviceId));
         }
-        if (error.code === 'RATE_LIMITED' || error.status === 429) {
-          return res.status(429).json({
-            error: 'Trop de tentatives de paiement. Reessaie dans quelques minutes.',
-          });
-        }
         console.error('[subscription/pay] resume', error.message);
-        return res.status(503).json({
-          error: 'Paiement temporairement indisponible. Reessaie dans un instant.',
-        });
       }
     }
 
@@ -215,6 +202,7 @@ app.post('/api/subscription/pay', payLimiter, async (req, res) => {
       clientId: client.id,
       sunrisePaymentId: payment.paymentId,
       amount: config.annualFcfa,
+      paymentUrl: payment.paymentUrl,
     });
 
     await saveSubscription(deviceId, {

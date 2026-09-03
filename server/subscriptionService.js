@@ -7,8 +7,14 @@ import {
   isSubscriptionActive,
   markPaymentCompleted,
   saveSubscription,
-  updatePaymentStatus,
 } from './subscriptionStore.js';
+
+function checkoutUrlFor(paymentId, storedUrl) {
+  if (storedUrl) {
+    return storedUrl;
+  }
+  return `${config.sunrisePayUrl}/pay/${encodeURIComponent(paymentId)}`;
+}
 
 export async function activateSubscription(deviceId, paymentId, {verifyWithSunrise = false} = {}) {
   const current = await getSubscription(deviceId);
@@ -59,27 +65,26 @@ export async function activateSubscription(deviceId, paymentId, {verifyWithSunri
 }
 
 export async function resumePendingPayment(deviceId, pendingPaymentId) {
-  const remote = await getPaymentStatus(pendingPaymentId);
-
-  if (remote.status === 'pending' && remote.paymentUrl) {
-    return {
-      paymentUrl: remote.paymentUrl,
-      paymentId: pendingPaymentId,
-      amount: config.annualFcfa,
-      reused: true,
-    };
+  const paymentRecord = await getPaymentRecord(pendingPaymentId);
+  if (!paymentRecord || paymentRecord.deviceId !== deviceId) {
+    return null;
   }
 
-  if (remote.status === 'completed') {
-    await activateSubscription(deviceId, pendingPaymentId, {verifyWithSunrise: true});
+  if (paymentRecord.status === 'completed') {
+    await activateSubscription(deviceId, pendingPaymentId);
     const error = new Error('Paiement deja complete');
     error.code = 'PAYMENT_ALREADY_COMPLETED';
     throw error;
   }
 
-  if (remote.status === 'failed' || remote.status === 'cancelled') {
-    await updatePaymentStatus(pendingPaymentId, remote.status);
+  if (paymentRecord.status === 'failed' || paymentRecord.status === 'cancelled') {
+    return null;
   }
 
-  return null;
+  return {
+    paymentUrl: checkoutUrlFor(pendingPaymentId, paymentRecord.paymentUrl),
+    paymentId: pendingPaymentId,
+    amount: config.annualFcfa,
+    reused: true,
+  };
 }

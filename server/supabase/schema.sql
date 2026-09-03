@@ -34,6 +34,7 @@ create table if not exists payments (
   sunrise_payment_id text unique not null,
   amount integer not null,
   status text not null default 'pending',
+  payment_url text,
   created_at timestamptz not null default now(),
   completed_at timestamptz
 );
