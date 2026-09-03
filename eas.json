@@ -14,7 +14,7 @@
     "preview": {
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://delai-manager-api.onrender.com/api"
+        "EXPO_PUBLIC_API_URL": "https://delai-manager.onrender.com/api"
       },
       "android": {
         "buildType": "apk",
@@ -27,7 +27,7 @@
     "preview-iphone": {
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://delai-manager-api.onrender.com/api"
+        "EXPO_PUBLIC_API_URL": "https://delai-manager.onrender.com/api"
       },
       "ios": {
         "simulator": false
@@ -36,7 +36,7 @@
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://delai-manager-api.onrender.com/api"
+        "EXPO_PUBLIC_API_URL": "https://delai-manager.onrender.com/api"
       }
     }
   },

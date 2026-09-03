@@ -13,7 +13,7 @@
     },
     "scheme": "delai-manager",
     "extra": {
-      "apiUrl": "http://10.20.130.59:3200/api",
+      "apiUrl": "https://delai-manager.onrender.com/api",
       "eas": {
         "projectId": "7e1d2e12-b8fa-4b92-8e0f-6ada150b79fb"
       }

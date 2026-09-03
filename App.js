@@ -1693,7 +1693,6 @@ function SettingsScreen({
           value={settings.notificationsEnabled}
           onChange={value => updateSettings({notificationsEnabled: value})}
         />
-        <Text style={styles.deadlineMeta}>{t('localRemindersHint')}</Text>
 
         <ReminderPlanner
           compact
