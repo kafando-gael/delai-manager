@@ -143,8 +143,13 @@ app.post('/api/subscription/pay', payLimiter, async (req, res) => {
     if (!deviceId || !isValidDeviceId(deviceId)) {
       return res.status(400).json({error: 'deviceId invalide'});
     }
-    if (!customerEmail || !customerEmail.includes('@')) {
-      return res.status(400).json({error: 'Email requis pour le paiement'});
+    if (
+      !customerEmail
+      || !customerEmail.includes('@')
+      || customerEmail.endsWith('@delaimanager.local')
+      || customerEmail.endsWith('@ontime.local')
+    ) {
+      return res.status(400).json({error: 'Email valide requis pour le paiement'});
     }
 
     const current = await getSubscription(deviceId);
@@ -167,7 +172,7 @@ app.post('/api/subscription/pay', payLimiter, async (req, res) => {
 
     const client = await upsertClient({
       deviceId,
-      name: customerName || 'Utilisateur DelaiManager',
+      name: customerName || 'Utilisateur OnTime',
       email: customerEmail,
       phone: customerPhone || null,
       usageReason: usageReason || null,
@@ -185,7 +190,7 @@ app.post('/api/subscription/pay', payLimiter, async (req, res) => {
       metadata: {
         customerEmail,
         customerPhone: customerPhone || '22600000000',
-        customerName: customerName || 'Utilisateur DelaiManager',
+        customerName: customerName || 'Utilisateur OnTime',
         returnUrl,
         cancelUrl,
       },
@@ -304,7 +309,7 @@ app.post(
 app.use(errorHandler);
 
 app.listen(config.port, () => {
-  console.log(`DelaiManager API (${config.nodeEnv}) on port ${config.port}`);
+  console.log(`OnTime API (${config.nodeEnv}) on port ${config.port}`);
   if (config.isProduction) {
     console.log(`Public URL: ${config.publicApiUrl}`);
   }

@@ -1,13 +1,18 @@
 {
-  "name": "gestionnaire-de-delai",
+  "name": "ontime",
   "version": "0.0.1",
   "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
-    "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web",
-    "server": "cd server && npm start"
+    "start": "bash scripts/expo-start.sh",
+    "start:tunnel": "bash scripts/expo-start.sh --clear",
+    "android": "bash scripts/run-with-node20.sh expo start --android",
+    "ios": "bash scripts/run-with-node20.sh expo start --ios",
+    "web": "bash scripts/run-with-node20.sh expo start --web",
+    "server": "bash scripts/run-with-node20.sh sh -c 'cd server && npm start'",
+    "server:dev": "bash scripts/run-with-node20.sh sh -c 'cd server && npm run dev'"
   },
   "dependencies": {
     "@react-native-community/datetimepicker": "^8.4.4",

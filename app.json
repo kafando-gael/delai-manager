@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Gestionnaire de Délai",
-    "slug": "gestionnaire-de-delai",
+    "name": "OnTime",
+    "slug": "ontime",
     "owner": "kafandogael",
     "version": "0.0.1",
     "orientation": "portrait",
@@ -13,7 +13,7 @@
     },
     "scheme": "delai-manager",
     "extra": {
-      "apiUrl": "https://delai-manager-api.onrender.com/api",
+      "apiUrl": "http://10.20.130.59:3200/api",
       "eas": {
         "projectId": "7e1d2e12-b8fa-4b92-8e0f-6ada150b79fb"
       }

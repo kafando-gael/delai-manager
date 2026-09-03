@@ -1,21 +1,45 @@
-const API_URL = (
-  process.env.EXPO_PUBLIC_API_URL
-  || 'http://localhost:3200/api'
-).replace(/\/$/, '');
+import Constants from 'expo-constants';
+
+function resolveApiUrl() {
+  const fromEnv = process.env.EXPO_PUBLIC_API_URL;
+  const fromExtra = Constants.expoConfig?.extra?.apiUrl;
+  const raw = (fromEnv || fromExtra || 'http://localhost:3200/api').replace(/\/$/, '');
+  return raw;
+}
+
+const API_URL = resolveApiUrl();
+const REQUEST_TIMEOUT_MS = 4000;
 
 export const TRIAL_DURATION_MONTHS = 1;
 export const TRIAL_DEADLINE_LIMIT = 4;
 
 async function request(path, options = {}) {
-  const response = await fetch(`${API_URL}${path}`, {
-    headers: {'Content-Type': 'application/json', ...(options.headers || {})},
-    ...options,
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || 'Erreur reseau');
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = controller
+    ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+    : null;
+
+  try {
+    const response = await fetch(`${API_URL}${path}`, {
+      headers: {'Content-Type': 'application/json', ...(options.headers || {})},
+      ...options,
+      signal: controller?.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || 'Erreur reseau');
+    }
+    return data;
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error('Network request timed out');
+    }
+    throw error;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
-  return data;
 }
 
 export async function syncClientProfile({deviceId, name, email, phone, usageReason, ageRange}) {

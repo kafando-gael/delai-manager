@@ -39,11 +39,17 @@ import {
   syncClientProfile,
 } from './subscription';
 import {WebView} from 'react-native-webview';
+import {
+  LanguageProvider,
+  ageRangeOptions,
+  translate,
+  useI18n,
+} from './i18n';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 const LOGO = require('./assets/app-logo.png');
-const APP_NAME = 'Gestionnaire de Délai';
+const APP_NAME = 'OnTime';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SUBSCRIPTION_ANNUAL_FCFA = 1000;
 
@@ -59,12 +65,12 @@ const EMPTY_FORM = {
 };
 
 const REMINDER_PRESETS = [
-  {days: 0, label: 'Le jour même'},
-  {days: 1, label: '1 jour avant'},
-  {days: 3, label: '3 jours avant'},
-  {days: 7, label: '1 semaine avant'},
-  {days: 14, label: '2 semaines avant'},
-  {days: 30, label: '1 mois avant'},
+  {days: 0, labelKey: 'reminderDayOf'},
+  {days: 1, labelKey: 'reminder1Day'},
+  {days: 3, labelKey: 'reminder3Days'},
+  {days: 7, labelKey: 'reminder1Week'},
+  {days: 14, labelKey: 'reminder2Weeks'},
+  {days: 30, labelKey: 'reminder1Month'},
 ];
 
 const TIME_OPTIONS = [
@@ -79,50 +85,36 @@ const TIME_OPTIONS = [
 const PRESET_OFFSET_DAYS = new Set(REMINDER_PRESETS.map(preset => preset.days));
 const DEFAULT_REMINDER_OFFSETS = [0, 1, 7];
 
-const CATEGORY_OPTIONS = [
-  ['Admin', 'Administratif (passeport, visa...)'],
-  ['Maison', 'Maison / logement'],
-  ['Santé', 'Santé'],
-  ['Voiture', 'Voiture / transport'],
-  ['Travail', 'Travail / études'],
-];
-
-const USAGE_REASONS = [
-  ['admin', 'Documents administratifs'],
-  ['personal', 'Organisation personnelle'],
-  ['family', 'Famille / foyer'],
-  ['work', 'Travail / etudes'],
-  ['other', 'Autre'],
-];
-
-const AGE_RANGES = [
-  ['under18', 'Moins de 18 ans'],
-  ['18-24', '18-24 ans'],
-  ['25-34', '25-34 ans'],
-  ['35-44', '35-44 ans'],
-  ['45plus', '45 ans et plus'],
-];
-
 const ONBOARDING_SLIDES = [
   {
-    title: 'Toutes tes echeances',
-    copy: 'Centralise passeport, loyer, assurance et documents importants au meme endroit.',
+    titleKey: 'onboarding1Title',
+    copyKey: 'onboarding1Copy',
     image: require('./assets/onboarding-1-deadlines.png'),
   },
   {
-    title: 'Ne rate plus rien',
-    copy: 'Repere les dates critiques, surveille les echeances a venir et reste toujours a jour.',
+    titleKey: 'onboarding2Title',
+    copyKey: 'onboarding2Copy',
     image: require('./assets/onboarding-2-reminders.png'),
   },
   {
-    title: 'Simple et local',
-    copy: 'Tes donnees restent sur ton telephone. Commence en quelques secondes.',
+    titleKey: 'onboarding3Title',
+    copyKey: 'onboarding3Copy',
     image: require('./assets/onboarding-3-local.png'),
   },
 ];
 
 function generateDeviceId() {
   return `dev_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function isPlaceholderEmail(email) {
+  const value = String(email || '').trim().toLowerCase();
+  return !value || value.endsWith('@delaimanager.local') || value.endsWith('@ontime.local');
+}
+
+function isValidEmail(email) {
+  const value = String(email || '').trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && !isPlaceholderEmail(value);
 }
 
 function isPaymentReturnUrl(url) {
@@ -159,31 +151,30 @@ function daysBefore(value) {
   return Math.ceil((startOfDay(date).getTime() - startOfDay(new Date()).getTime()) / DAY_MS);
 }
 
-function formatDate(value) {
+function formatDate(value, locale = 'fr-FR') {
   const date = parseDate(value);
   if (!date) {
     return value;
   }
-  return new Intl.DateTimeFormat('fr-FR', {
+  return new Intl.DateTimeFormat(locale, {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
   }).format(date);
 }
 
-function distanceLabel(value) {
+function distanceLabel(value, t) {
   const days = daysBefore(value);
   if (days < 0) {
-    const late = Math.abs(days);
-    return `depuis ${late} jour${late > 1 ? 's' : ''}`;
+    return t('sinceDays', {count: Math.abs(days)});
   }
   if (days === 0) {
-    return "aujourd'hui";
+    return t('todayLower');
   }
   if (days === 1) {
-    return 'demain';
+    return t('tomorrow');
   }
-  return `dans ${days} jours`;
+  return t('inDays', {count: days});
 }
 
 const C = {
@@ -199,18 +190,18 @@ const C = {
   border: '#e2e8f0',
 };
 
-function statusFor(deadline, settings) {
+function statusFor(deadline, settings, t) {
   const days = daysBefore(deadline.dueDate);
   if (days < 0) {
-    return {id: 'expired', label: 'En retard', color: C.red, barColor: C.red};
+    return {id: 'expired', label: t ? t('overdue') : 'En retard', color: C.red, barColor: C.red};
   }
   if (days <= settings.criticalDays) {
-    return {id: 'critical', label: 'Urgent', color: C.orange, barColor: C.orange};
+    return {id: 'critical', label: t ? t('urgent') : 'Urgent', color: C.orange, barColor: C.orange};
   }
   if (days <= settings.watchDays) {
-    return {id: 'watch', label: 'A venir', color: C.blue, barColor: C.blue};
+    return {id: 'watch', label: t ? t('upcoming') : 'A venir', color: C.blue, barColor: C.blue};
   }
-  return {id: 'ok', label: 'A jour', color: C.green, barColor: C.blue};
+  return {id: 'ok', label: t ? t('upToDate') : 'A jour', color: C.green, barColor: C.blue};
 }
 
 function urgencyProgress(dueDate, settings) {
@@ -254,39 +245,48 @@ function nextDate(dueDate, repetition) {
   return date.toISOString().slice(0, 10);
 }
 
-function repetitionLabel(value) {
+function repetitionLabel(value, t) {
   if (value === 'monthly') {
-    return 'Mensuelle';
+    return t('monthly');
   }
   if (value === 'yearly') {
-    return 'Annuelle';
+    return t('yearly');
   }
-  return 'Aucune';
+  return t('none');
 }
 
-function remindersLabel(item) {
+function remindersLabel(item, t) {
   const offsets = item.reminderOffsets || [];
   if (!offsets.length) {
-    return 'Desactives';
+    return t('remindersOff');
   }
   const time = formatReminderTime(item.reminderHour ?? 9, item.reminderMinute ?? 0);
-  return `A ${time} · ${offsets.map(offsetLabel).join(', ')}`;
+  return t('remindersSummary', {
+    time,
+    list: offsets.map(days => offsetLabel(days, t)).join(', '),
+  });
 }
 
-function offsetLabel(days) {
+function offsetLabel(days, t) {
   if (days === 0) {
-    return 'jour même';
+    return t('reminderDayOf');
   }
   if (days === 1) {
-    return '1 jour avant';
+    return t('reminder1Day');
+  }
+  if (days === 3) {
+    return t('reminder3Days');
   }
   if (days === 7) {
-    return '1 semaine avant';
+    return t('reminder1Week');
+  }
+  if (days === 14) {
+    return t('reminder2Weeks');
   }
   if (days === 30) {
-    return '1 mois avant';
+    return t('reminder1Month');
   }
-  return `${days} jours avant`;
+  return t('daysBeforeLabel', {count: days});
 }
 
 function formatReminderTime(hour, minute) {
@@ -391,19 +391,19 @@ function buildCalendarGrid(year, month) {
   return cells;
 }
 
-function monthLabel(year, month) {
-  return new Intl.DateTimeFormat('fr-FR', {month: 'long', year: 'numeric'}).format(new Date(year, month, 1));
+function monthLabel(year, month, locale = 'fr-FR') {
+  return new Intl.DateTimeFormat(locale, {month: 'long', year: 'numeric'}).format(new Date(year, month, 1));
 }
 
-function groupDeadlinesForHome(deadlines, settings) {
+function groupDeadlinesForHome(deadlines, settings, t) {
   const groups = [
-    {id: 'expired', title: 'En retard', items: []},
-    {id: 'critical', title: 'Urgent', items: []},
-    {id: 'upcoming', title: 'A venir', items: []},
+    {id: 'expired', title: t('sectionOverdue'), items: []},
+    {id: 'critical', title: t('sectionUrgent'), items: []},
+    {id: 'upcoming', title: t('sectionUpcoming'), items: []},
   ];
 
   for (const item of deadlines) {
-    const status = statusFor(item, settings);
+    const status = statusFor(item, settings, t);
     if (status.id === 'expired') {
       groups[0].items.push(item);
     } else if (status.id === 'critical') {
@@ -443,6 +443,7 @@ export default function App() {
     defaultReminderHour: 9,
     defaultReminderMinute: 0,
     defaultReminderOffsets: [...DEFAULT_REMINDER_OFFSETS],
+    language: 'fr',
   });
   const [deadlines, setDeadlines] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -533,18 +534,22 @@ export default function App() {
         setDb(database);
         setDeviceId(nextDeviceId);
         const loaded = await loadData(database, nextDeviceId);
-        if (loaded?.notificationsEnabled) {
-          await requestNotificationPermissions();
-          await syncAllDeadlineNotifications(loaded.deadlines, true);
-        }
         setReady(true);
         await SplashScreen.hideAsync();
+        if (loaded?.notificationsEnabled) {
+          requestNotificationPermissions()
+            .then(() => syncAllDeadlineNotifications(loaded.deadlines, true))
+            .catch(() => {});
+        }
       }
     }
 
     boot().catch(async error => {
       await SplashScreen.hideAsync();
-      Alert.alert('Erreur', `Impossible de charger ${APP_NAME} : ${error.message}`);
+      Alert.alert(
+        translate('fr', 'loadError'),
+        translate('fr', 'cannotLoadApp', {app: APP_NAME, error: error.message}),
+      );
     });
 
     return () => {
@@ -560,7 +565,7 @@ export default function App() {
       await syncClientProfile({
         deviceId: deviceIdValue,
         name: profileData.name,
-        email: profileData.email || `${deviceIdValue}@delaimanager.local`,
+        email: profileData.email,
         phone: profileData.phone || '',
         usageReason: profileData.usageReason || '',
         ageRange: profileData.ageRange || '',
@@ -603,9 +608,14 @@ export default function App() {
     const mappedDeadlines = rows.map(mapDeadline);
 
     if (profileRow) {
+      let email = profileRow.email || '';
+      if (isPlaceholderEmail(email)) {
+        email = '';
+        await database.runAsync(`UPDATE profile SET email = '' WHERE id = 1`);
+      }
       const nextProfile = {
         name: profileRow.name,
-        email: profileRow.email || '',
+        email,
         phone: profileRow.phone || '',
         usageReason: profileRow.usage_reason || '',
         ageRange: profileRow.age_range || '',
@@ -640,10 +650,13 @@ export default function App() {
       defaultReminderHour: settingsRow?.default_reminder_hour ?? 9,
       defaultReminderMinute: settingsRow?.default_reminder_minute ?? 0,
       defaultReminderOffsets: parseReminderOffsets(settingsRow?.default_reminder_offsets, null),
+      language: settingsRow?.language === 'en' ? 'en' : 'fr',
     };
     setSettings(nextSettings);
     setDeadlines(mappedDeadlines);
-    await syncSubscription(deviceIdValue, nextTrialStartedAt);
+    setSubscription(mergeSubscriptionWithTrial(null, nextTrialStartedAt));
+    // Don't block app open on API — sync in background with a short timeout.
+    syncSubscription(deviceIdValue, nextTrialStartedAt).catch(() => {});
     return {deadlines: mappedDeadlines, notificationsEnabled: nextSettings.notificationsEnabled};
   }
 
@@ -651,13 +664,6 @@ export default function App() {
     () => [...deadlines].sort((a, b) => parseDate(a.dueDate) - parseDate(b.dueDate)),
     [deadlines],
   );
-
-  const domainSuggestions = useMemo(() => {
-    const names = deadlines
-      .map(item => item.domain)
-      .filter(name => name && name !== 'Sans domaine' && name !== 'Sans catégorie');
-    return [...new Set(names)].slice(0, 8);
-  }, [deadlines]);
 
   const stats = useMemo(() => {
     return {
@@ -667,6 +673,10 @@ export default function App() {
     };
   }, [deadlines, settings]);
 
+  const language = settings.language === 'en' ? 'en' : 'fr';
+  const locale = language === 'en' ? 'en-US' : 'fr-FR';
+  const t = useMemo(() => (key, params) => translate(language, key, params), [language]);
+
   async function completeIntro() {
     await db.runAsync('UPDATE app_settings SET intro_completed = 1 WHERE id = 1');
     setSettings(current => ({...current, introCompleted: true}));
@@ -675,33 +685,31 @@ export default function App() {
 
   async function createProfile() {
     const name = accessForm.name.trim();
-    const usageReason = accessForm.usageReason;
     const ageRange = accessForm.ageRange;
     if (!name) {
-      Alert.alert('Information manquante', 'Indique ton nom.');
-      return;
-    }
-    if (!usageReason) {
-      Alert.alert('Information manquante', 'Selectionne une raison d\'utilisation.');
+      Alert.alert(t('missingInfo'), t('enterName'));
       return;
     }
     if (!ageRange) {
-      Alert.alert('Information manquante', 'Selectionne ta tranche d\'age.');
+      Alert.alert(t('missingInfo'), t('selectAge'));
       return;
     }
     if (!accessForm.termsAccepted) {
-      Alert.alert('Conditions requises', 'Accepte les termes et conditions d\'utilisation pour continuer.');
+      Alert.alert(t('termsRequired'), t('acceptTermsAlert'));
       return;
     }
-    const email = accessForm.email.trim() || `${deviceId}@delaimanager.local`;
+    const email = accessForm.email.trim();
+    if (email && !isValidEmail(email)) {
+      Alert.alert(t('invalidEmail'), t('fixEmailOrEmpty'));
+      return;
+    }
     const trialStart = new Date().toISOString();
     await db.runAsync(
       `INSERT OR REPLACE INTO profile
         (id, name, access_hint, access_code, email, phone, usage_reason, age_range, terms_accepted)
-       VALUES (1, ?, '', '', ?, '', ?, ?, 1)`,
+       VALUES (1, ?, '', '', ?, '', '', ?, 1)`,
       name,
       email,
-      usageReason,
       ageRange,
     );
     await db.runAsync('UPDATE app_settings SET trial_started_at = ? WHERE id = 1', trialStart);
@@ -710,16 +718,20 @@ export default function App() {
       name,
       email,
       phone: '',
-      usageReason,
+      usageReason: '',
       ageRange,
       termsAccepted: true,
     };
     await syncClientToServer(nextProfile);
     await loadData();
     Alert.alert(
-      'Essai gratuit — 1 mois',
-      `Bienvenue ${name} !\n\nTu as 1 mois d'essai avec jusqu'a ${TRIAL_DEADLINE_LIMIT} echeances.\n\nApres cette periode, tu pourras t'abonner (${SUBSCRIPTION_ANNUAL_FCFA.toLocaleString('fr-FR')} FCFA / an) pour continuer sans limite.`,
-      [{text: 'Compris'}],
+      t('freeTrialTitle'),
+      t('freeTrialBody', {
+        name,
+        limit: TRIAL_DEADLINE_LIMIT,
+        price: SUBSCRIPTION_ANNUAL_FCFA.toLocaleString(locale),
+      }),
+      [{text: t('understood')}],
     );
   }
 
@@ -733,11 +745,11 @@ export default function App() {
 
   async function saveDeadline() {
     if (!form.title.trim()) {
-      Alert.alert('Titre requis', 'Ajoute un titre pour cette echeance.');
+      Alert.alert(t('titleRequired'), t('addTitle'));
       return;
     }
     if (!parseDate(form.dueDate)) {
-      Alert.alert('Date invalide', 'Choisis une date d\'echeance.');
+      Alert.alert(t('invalidDate'), t('chooseDueDate'));
       return;
     }
     if (!form.id && !canAddDeadline(deadlines.length, subscription)) {
@@ -834,7 +846,8 @@ export default function App() {
     await db.runAsync(
       `UPDATE app_settings
        SET critical_days = ?, watch_days = ?, notifications_enabled = ?,
-           default_reminder_hour = ?, default_reminder_minute = ?, default_reminder_offsets = ?
+           default_reminder_hour = ?, default_reminder_minute = ?, default_reminder_offsets = ?,
+           language = ?
        WHERE id = 1`,
       next.criticalDays,
       next.watchDays,
@@ -842,6 +855,7 @@ export default function App() {
       next.defaultReminderHour,
       next.defaultReminderMinute,
       JSON.stringify(next.defaultReminderOffsets),
+      next.language === 'en' ? 'en' : 'fr',
     );
     setSettings(next);
     if ('notificationsEnabled' in patch) {
@@ -875,25 +889,46 @@ export default function App() {
     setActiveTab('add');
   }
 
+  async function updateProfileEmail(nextEmail) {
+    const email = String(nextEmail || '').trim();
+    if (!isValidEmail(email)) {
+      Alert.alert(t('invalidEmail'), t('enterValidEmail'));
+      return false;
+    }
+    if (!db || !profile) {
+      return false;
+    }
+    await db.runAsync('UPDATE profile SET email = ? WHERE id = 1', email);
+    const nextProfile = {...profile, email};
+    setProfile(nextProfile);
+    await syncClientToServer(nextProfile);
+    return true;
+  }
+
   async function beginSubscriptionPayment() {
     setPaymentLoading(true);
     try {
+      if (!isValidEmail(profile?.email)) {
+        setShowPaywall(false);
+        Alert.alert(t('emailRequiredPay'), t('emailRequiredPayBody'));
+        return;
+      }
       const result = await startSubscriptionPayment({
         deviceId,
-        customerEmail: profile?.email || `${deviceId}@delaimanager.local`,
-        customerName: profile?.name || 'Utilisateur',
+        customerEmail: profile.email.trim(),
+        customerName: profile?.name || t('userFallback'),
         customerPhone: profile?.phone || '',
         usageReason: profile?.usageReason || '',
         ageRange: profile?.ageRange || '',
       });
       if (!result.paymentUrl) {
-        throw new Error('Lien de paiement manquant');
+        throw new Error(t('cannotStartPayment'));
       }
       setPendingPaymentId(result.paymentId);
       setPaymentUrl(result.paymentUrl);
       setShowPaywall(false);
     } catch (error) {
-      Alert.alert('Paiement', error.message || 'Impossible de demarrer le paiement.');
+      Alert.alert(t('payment'), error.message || t('cannotStartPayment'));
     } finally {
       setPaymentLoading(false);
     }
@@ -923,23 +958,34 @@ export default function App() {
       setPaymentUrl(null);
       setPendingPaymentId(null);
       if (isSubscriptionActive(status)) {
-        Alert.alert('Abonnement actif', 'Tu peux maintenant ajouter autant d\'echeances que tu veux pendant 1 an.');
+        Alert.alert(t('subscriptionActive'), t('subscriptionActiveBody'));
       } else {
-        Alert.alert('Paiement en cours', 'Ton paiement est en traitement. Reessaie dans quelques instants.');
+        Alert.alert(t('paymentPending'), t('paymentPendingBody'));
       }
     } catch {
       setPaymentUrl(null);
       setPendingPaymentId(null);
-      Alert.alert('Verification', 'Impossible de confirmer le paiement pour le moment.');
+      Alert.alert(t('verification'), t('cannotConfirmPayment'));
     }
   }
 
+  function withI18n(node) {
+    return (
+      <LanguageProvider
+        language={language}
+        setLanguage={lang => updateSettings({language: lang === 'en' ? 'en' : 'fr'})}
+      >
+        {node}
+      </LanguageProvider>
+    );
+  }
+
   if (!ready) {
-    return <LoadingScreen />;
+    return withI18n(<LoadingScreen />);
   }
 
   if (!settings.introCompleted) {
-    return (
+    return withI18n(
       <OnboardingScreen
         slide={onboardingSlide}
         onNext={() => {
@@ -950,32 +996,32 @@ export default function App() {
           completeIntro();
         }}
         onSkip={completeIntro}
-      />
+      />,
     );
   }
 
   if (!profile) {
-    return (
+    return withI18n(
       <AccessScreen
         accessForm={accessForm}
         setAccessForm={setAccessForm}
         createProfile={createProfile}
-      />
+      />,
     );
   }
 
-  const todayLabel = new Intl.DateTimeFormat('fr-FR', {
+  const todayLabel = new Intl.DateTimeFormat(locale, {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   }).format(new Date());
 
-  return (
+  return withI18n(
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
       <View style={styles.appShell}>
         <View style={styles.appHeader}>
           <View style={styles.appHeaderBrand}>
             <Image source={LOGO} style={styles.appHeaderLogo} />
-            <Text style={styles.appHeaderName}>DelaiManager</Text>
+            <Text style={styles.appHeaderName}>{APP_NAME}</Text>
           </View>
           <Pressable style={styles.appHeaderAction} onPress={() => setActiveTab('settings')}>
             <Ionicons name="settings-outline" size={24} color="#64748b" />
@@ -1005,7 +1051,6 @@ export default function App() {
             <AddScreen
               form={form}
               settings={settings}
-              domainSuggestions={domainSuggestions}
               updateForm={updateForm}
               saveDeadline={saveDeadline}
               onCancel={() => {
@@ -1021,24 +1066,24 @@ export default function App() {
               stats={stats}
               deadlines={deadlines}
               subscription={subscription}
-              domainSuggestions={domainSuggestions}
               updateSettings={updateSettings}
               onSubscribe={() => setShowPaywall(true)}
               onRefreshSubscription={() => syncSubscription()}
+              onUpdateEmail={updateProfileEmail}
             />
           ) : null}
         </View>
 
         <View style={styles.tabBar}>
-          <TabButton id="home" label="Accueil" icon="home" activeTab={activeTab} setActiveTab={setActiveTab} />
-          <TabButton id="calendar" label="Calendrier" icon="calendar" activeTab={activeTab} setActiveTab={setActiveTab} />
+          <TabButton id="home" label={t('tabHome')} icon="home" activeTab={activeTab} setActiveTab={setActiveTab} />
+          <TabButton id="calendar" label={t('tabCalendar')} icon="calendar" activeTab={activeTab} setActiveTab={setActiveTab} />
           <View style={styles.fabWrapper}>
             <Pressable style={styles.fab} onPress={openAddDeadline}>
               <Ionicons name="add" size={24} color="#ffffff" />
-              <Text style={styles.fabLabel}>Nouveau{'\n'}Délai</Text>
+              <Text style={styles.fabLabel}>{t('fabNew')}</Text>
             </Pressable>
           </View>
-          <TabButton id="settings" label="Reglages" icon="settings" activeTab={activeTab} setActiveTab={setActiveTab} />
+          <TabButton id="settings" label={t('tabSettings')} icon="settings" activeTab={activeTab} setActiveTab={setActiveTab} />
         </View>
       </View>
 
@@ -1069,19 +1114,21 @@ export default function App() {
 }
 
 function LoadingScreen() {
+  const {t} = useI18n();
   return (
     <SafeAreaView style={styles.loadingScreen}>
       <View style={styles.loadingBrand}>
         <Image source={LOGO} style={styles.loadingLogo} />
-        <Text style={styles.loadingBrandName}>DelaiManager</Text>
+        <Text style={styles.loadingBrandName}>{APP_NAME}</Text>
       </View>
       <ActivityIndicator color={C.blue} style={{marginTop: 28}} />
-      <Text style={styles.loadingText}>Chargement...</Text>
+      <Text style={styles.loadingText}>{t('loading')}</Text>
     </SafeAreaView>
   );
 }
 
 function OnboardingScreen({slide, onNext, onSkip}) {
+  const {t} = useI18n();
   const current = ONBOARDING_SLIDES[slide];
   const isLast = slide === ONBOARDING_SLIDES.length - 1;
 
@@ -1090,14 +1137,14 @@ function OnboardingScreen({slide, onNext, onSkip}) {
       <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
       <View style={styles.onboardingTopBar}>
         <Pressable onPress={onSkip}>
-          <Text style={styles.onboardingSkip}>Passer</Text>
+          <Text style={styles.onboardingSkip}>{t('skip')}</Text>
         </Pressable>
       </View>
 
       <View style={styles.onboardingBody}>
         <Image source={current.image} style={styles.onboardingIllustration} />
-        <Text style={styles.onboardingTitle}>{current.title}</Text>
-        <Text style={styles.onboardingCopy}>{current.copy}</Text>
+        <Text style={styles.onboardingTitle}>{t(current.titleKey)}</Text>
+        <Text style={styles.onboardingCopy}>{t(current.copyKey)}</Text>
       </View>
 
       <View style={styles.onboardingFooter}>
@@ -1106,54 +1153,47 @@ function OnboardingScreen({slide, onNext, onSkip}) {
             <View key={index} style={[styles.onboardingDot, index === slide && styles.onboardingDotActive]} />
           ))}
         </View>
-        <PrimaryButton label={isLast ? 'Commencer' : 'Suivant'} onPress={onNext} />
+        <PrimaryButton label={isLast ? t('start') : t('next')} onPress={onNext} />
       </View>
     </SafeAreaView>
   );
 }
 
 function AccessScreen(props) {
+  const {t} = useI18n();
   return (
     <SafeAreaView style={styles.accessScreen}>
       <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
       <ScrollView contentContainerStyle={styles.accessScroll} keyboardShouldPersistTaps="handled">
         <View style={styles.accessPanel}>
           <Image source={LOGO} style={styles.accessLogo} />
-          <Text style={styles.accessTitle}>{`Bienvenue dans ${APP_NAME}`}</Text>
-          <Text style={styles.accessCopy}>
-            Quelques infos pour personnaliser ton experience.
-          </Text>
+          <Text style={styles.accessTitle}>{t('welcomeTitle', {app: APP_NAME})}</Text>
+          <Text style={styles.accessCopy}>{t('welcomeCopy')}</Text>
           <View style={styles.trialBanner}>
-            <Text style={styles.trialBannerTitle}>Essai gratuit inclus</Text>
+            <Text style={styles.trialBannerTitle}>{t('trialBannerTitle')}</Text>
             <Text style={styles.trialBannerCopy}>
-              1 mois pour tester · jusqu'a {TRIAL_DEADLINE_LIMIT} echeances.
-              Ensuite, un abonnement sera necessaire pour continuer sans limite.
+              {t('trialBannerCopy', {limit: TRIAL_DEADLINE_LIMIT})}
             </Text>
           </View>
 
           <Input
-            label="Ton nom"
+            label={t('yourName')}
             value={props.accessForm.name}
             onChangeText={value => props.setAccessForm(current => ({...current, name: value}))}
           />
           <Input
-            label="Email"
+            label={t('emailOptional')}
             value={props.accessForm.email}
-            placeholder="Facultatif"
+            placeholder={t('emailPlaceholder')}
+            keyboardType="email-address"
+            autoCapitalize="none"
             onChangeText={value => props.setAccessForm(current => ({...current, email: value}))}
           />
           <Dropdown
-            label="Raison d'utilisation"
-            value={props.accessForm.usageReason}
-            options={USAGE_REASONS}
-            placeholder="Selectionne une raison"
-            onChange={value => props.setAccessForm(current => ({...current, usageReason: value}))}
-          />
-          <Dropdown
-            label="Tranche d'age"
+            label={t('ageRange')}
             value={props.accessForm.ageRange}
-            options={AGE_RANGES}
-            placeholder="Selectionne ta tranche d'age"
+            options={ageRangeOptions(t)}
+            placeholder={t('agePlaceholder')}
             onChange={value => props.setAccessForm(current => ({...current, ageRange: value}))}
           />
           <TermsRow
@@ -1162,7 +1202,7 @@ function AccessScreen(props) {
               props.setAccessForm(current => ({...current, termsAccepted: !current.termsAccepted}))
             }
           />
-          <PrimaryButton label={`Entrer dans ${APP_NAME}`} onPress={props.createProfile} />
+          <PrimaryButton label={t('enterApp', {app: APP_NAME})} onPress={props.createProfile} />
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -1170,6 +1210,7 @@ function AccessScreen(props) {
 }
 
 function CalendarScreen({deadlines, settings, onPressDeadline}) {
+  const {t, locale} = useI18n();
   const today = new Date();
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
@@ -1195,7 +1236,9 @@ function CalendarScreen({deadlines, settings, onPressDeadline}) {
 
   const grid = useMemo(() => buildCalendarGrid(viewYear, viewMonth), [viewYear, viewMonth]);
   const selectedDeadlines = deadlinesByDate[selectedDate] || [];
-  const weekdayLabels = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+  const weekdayLabels = locale.startsWith('en')
+    ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    : ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 
   function shiftMonth(delta) {
     const next = new Date(viewYear, viewMonth + delta, 1);
@@ -1212,15 +1255,19 @@ function CalendarScreen({deadlines, settings, onPressDeadline}) {
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.calendarContent}>
       <View style={styles.calendarHeaderRow}>
-        <Text style={styles.pageTitle}>Calendrier</Text>
+        <Text style={styles.pageTitle}>{t('calendar')}</Text>
         <Pressable style={styles.calendarTodayButton} onPress={goToToday}>
-          <Text style={styles.calendarTodayButtonText}>Aujourd'hui</Text>
+          <Text style={styles.calendarTodayButtonText}>{t('today')}</Text>
         </Pressable>
       </View>
 
       <View style={styles.calendarStatsBar}>
         <Text style={styles.calendarStatsText}>
-          {monthDeadlines.length} echeance{monthDeadlines.length > 1 ? 's' : ''} ce mois
+          {t('calendarStats', {
+            count: monthDeadlines.length,
+            expired: monthDeadlines.filter(item => statusFor(item, settings, t).id === 'expired').length,
+            critical: monthDeadlines.filter(item => statusFor(item, settings, t).id === 'critical').length,
+          })}
         </Text>
       </View>
 
@@ -1229,7 +1276,7 @@ function CalendarScreen({deadlines, settings, onPressDeadline}) {
           <Pressable style={styles.calendarNavButton} onPress={() => shiftMonth(-1)}>
             <Ionicons name="chevron-back" size={20} color="#0f172a" />
           </Pressable>
-          <Text style={styles.calendarMonthLabel}>{monthLabel(viewYear, viewMonth)}</Text>
+          <Text style={styles.calendarMonthLabel}>{monthLabel(viewYear, viewMonth, locale)}</Text>
           <Pressable style={styles.calendarNavButton} onPress={() => shiftMonth(1)}>
             <Ionicons name="chevron-forward" size={20} color="#0f172a" />
           </Pressable>
@@ -1238,15 +1285,15 @@ function CalendarScreen({deadlines, settings, onPressDeadline}) {
         <View style={styles.calendarLegend}>
           <View style={styles.calendarLegendItem}>
             <View style={[styles.calendarLegendDot, {backgroundColor: C.red}]} />
-            <Text style={styles.calendarLegendText}>En retard</Text>
+            <Text style={styles.calendarLegendText}>{t('overdue')}</Text>
           </View>
           <View style={styles.calendarLegendItem}>
             <View style={[styles.calendarLegendDot, {backgroundColor: C.orange}]} />
-            <Text style={styles.calendarLegendText}>Urgent</Text>
+            <Text style={styles.calendarLegendText}>{t('urgent')}</Text>
           </View>
           <View style={styles.calendarLegendItem}>
             <View style={[styles.calendarLegendDot, {backgroundColor: C.blue}]} />
-            <Text style={styles.calendarLegendText}>A venir</Text>
+            <Text style={styles.calendarLegendText}>{t('upcoming')}</Text>
           </View>
         </View>
 
@@ -1265,7 +1312,7 @@ function CalendarScreen({deadlines, settings, onPressDeadline}) {
             const dayDeadlines = deadlinesByDate[dateKey] || [];
             const isSelected = selectedDate === dateKey;
             const isToday = dateKey === toDateKey(today.getFullYear(), today.getMonth(), today.getDate());
-            const dominantStatus = dayDeadlines.length ? statusFor(dayDeadlines[0], settings) : null;
+            const dominantStatus = dayDeadlines.length ? statusFor(dayDeadlines[0], settings, t) : null;
 
             return (
               <Pressable
@@ -1293,7 +1340,7 @@ function CalendarScreen({deadlines, settings, onPressDeadline}) {
                 {dayDeadlines.length > 1 ? (
                   <View style={styles.calendarDots}>
                     {dayDeadlines.slice(0, 3).map(item => {
-                      const status = statusFor(item, settings);
+                      const status = statusFor(item, settings, t);
                       return <View key={item.id} style={[styles.calendarDot, {backgroundColor: status.barColor}]} />;
                     })}
                     <Text style={[styles.calendarCount, {color: dominantStatus.barColor}]}>
@@ -1311,8 +1358,8 @@ function CalendarScreen({deadlines, settings, onPressDeadline}) {
         </View>
       </View>
 
-      <Text style={styles.calendarSectionTitle}>Jour selectionne</Text>
-      <Text style={styles.calendarSelectedLabel}>{formatDate(selectedDate)}</Text>
+      <Text style={styles.calendarSectionTitle}>{t('selectedDay')}</Text>
+      <Text style={styles.calendarSelectedLabel}>{formatDate(selectedDate, locale)}</Text>
 
       {selectedDeadlines.length ? (
         selectedDeadlines.map(item => (
@@ -1320,11 +1367,11 @@ function CalendarScreen({deadlines, settings, onPressDeadline}) {
         ))
       ) : (
         <View style={styles.calendarEmpty}>
-          <Text style={styles.calendarEmptyText}>Aucune echeance ce jour-la.</Text>
+          <Text style={styles.calendarEmptyText}>{t('noDeadlineThatDay')}</Text>
         </View>
       )}
 
-      <Text style={styles.calendarSectionTitle}>Tout le mois</Text>
+      <Text style={styles.calendarSectionTitle}>{t('wholeMonth')}</Text>
       {monthDeadlines.length ? (
         monthDeadlines.map(item => (
           <CalendarDeadlineRow
@@ -1345,7 +1392,7 @@ function CalendarScreen({deadlines, settings, onPressDeadline}) {
         ))
       ) : (
         <View style={styles.calendarEmpty}>
-          <Text style={styles.calendarEmptyText}>Aucune echeance ce mois-ci.</Text>
+          <Text style={styles.calendarEmptyText}>{t('noDeadlineThisMonth')}</Text>
         </View>
       )}
     </ScrollView>
@@ -1353,15 +1400,16 @@ function CalendarScreen({deadlines, settings, onPressDeadline}) {
 }
 
 function CalendarDeadlineRow({item, settings, onPress, showDate}) {
-  const status = statusFor(item, settings);
+  const {t, locale} = useI18n();
+  const status = statusFor(item, settings, t);
   return (
     <Pressable style={styles.calendarDeadlineRow} onPress={onPress}>
       <View style={[styles.calendarDeadlineDot, {backgroundColor: status.barColor}]} />
       <View style={styles.calendarDeadlineBody}>
         <Text style={styles.calendarDeadlineTitle}>{item.title}</Text>
         <Text style={styles.calendarDeadlineMeta}>
-          {showDate ? `${formatDate(item.dueDate)} · ` : ''}
-          {item.domain ? `${item.domain} · ` : ''}{distanceLabel(item.dueDate)}
+          {showDate ? `${formatDate(item.dueDate, locale)} · ` : ''}
+          {item.domain ? `${item.domain} · ` : ''}{distanceLabel(item.dueDate, t)}
         </Text>
       </View>
       <View style={[styles.homeStatusBadge, {backgroundColor: status.barColor + '18'}]}>
@@ -1372,12 +1420,13 @@ function CalendarDeadlineRow({item, settings, onPress, showDate}) {
 }
 
 function HomeScreen({profile, stats, deadlines, settings, todayLabel, onPressDeadline, onAdd, onOpenCalendar}) {
-  const hasUrgent = stats.critical > 0 || stats.expired > 0;
-  const summary = hasUrgent
-    ? `${stats.critical + stats.expired} echeance${stats.critical + stats.expired > 1 ? 's' : ''} necessite${stats.critical + stats.expired > 1 ? 'nt' : ''} ton attention`
-    : `Tout est a jour — ${stats.upcoming} echeance${stats.upcoming > 1 ? 's' : ''} a venir`;
+  const {t} = useI18n();
+  const attention = stats.critical + stats.expired;
+  const summary = attention > 0
+    ? t('homeSummaryAttention', {count: attention})
+    : t('homeSummaryAllGood', {count: stats.upcoming});
 
-  const sections = groupDeadlinesForHome(deadlines, settings).map(group => ({
+  const sections = groupDeadlinesForHome(deadlines, settings, t).map(group => ({
     title: group.title,
     data: group.items,
   }));
@@ -1393,13 +1442,13 @@ function HomeScreen({profile, stats, deadlines, settings, todayLabel, onPressDea
       ListHeaderComponent={
         <View style={styles.homeHeader}>
           <View style={styles.homeHeaderLeft}>
-            <Text style={styles.homeGreeting}>Bonjour, {profile.name}</Text>
+            <Text style={styles.homeGreeting}>{t('hello', {name: profile.name})}</Text>
             <Text style={styles.homeToday}>{todayLabel}</Text>
             <Text style={styles.homeSummary}>{summary}</Text>
           </View>
           <Pressable style={styles.homeCalendarButton} onPress={onOpenCalendar}>
             <Ionicons name="calendar" size={18} color="#2563EB" />
-            <Text style={styles.homeCalendarButtonText}>Calendrier</Text>
+            <Text style={styles.homeCalendarButtonText}>{t('calendar')}</Text>
           </Pressable>
         </View>
       }
@@ -1411,10 +1460,10 @@ function HomeScreen({profile, stats, deadlines, settings, todayLabel, onPressDea
       )}
       ListEmptyComponent={
         <View style={styles.homeEmpty}>
-          <Text style={styles.homeEmptyTitle}>Aucune echeance</Text>
-          <Text style={styles.homeEmptyCopy}>Ajoute ta premiere date importante.</Text>
+          <Text style={styles.homeEmptyTitle}>{t('noDeadlines')}</Text>
+          <Text style={styles.homeEmptyCopy}>{t('addFirstDeadline')}</Text>
           <Pressable style={styles.homeEmptyButton} onPress={onAdd}>
-            <Text style={styles.homeEmptyButtonText}>Ajouter une echeance</Text>
+            <Text style={styles.homeEmptyButtonText}>{t('addDeadline')}</Text>
           </Pressable>
         </View>
       }
@@ -1423,7 +1472,8 @@ function HomeScreen({profile, stats, deadlines, settings, todayLabel, onPressDea
 }
 
 function HomeDeadlineRow({item, settings, onPress}) {
-  const status = statusFor(item, settings);
+  const {t} = useI18n();
+  const status = statusFor(item, settings, t);
   const progress = urgencyProgress(item.dueDate, settings);
   const iconName = domainIconName(item.domain);
 
@@ -1436,7 +1486,7 @@ function HomeDeadlineRow({item, settings, onPress}) {
         <View style={styles.homeRowBody}>
           <Text style={styles.homeRowTitle} numberOfLines={1}>{item.title}</Text>
           <Text style={styles.homeRowMeta} numberOfLines={1}>
-            {item.domain ? `${item.domain} · ` : ''}{distanceLabel(item.dueDate)}
+            {item.domain ? `${item.domain} · ` : ''}{distanceLabel(item.dueDate, t)}
           </Text>
         </View>
         <View style={[styles.homeStatusBadge, {backgroundColor: status.barColor + '18'}]}>
@@ -1448,60 +1498,47 @@ function HomeDeadlineRow({item, settings, onPress}) {
       </View>
       <View style={styles.progressFooter}>
         <Text style={styles.progressPct}>{Math.round(progress * 100)}%</Text>
-        <Text style={styles.progressDate}>{distanceLabel(item.dueDate)}</Text>
+        <Text style={styles.progressDate}>{distanceLabel(item.dueDate, t)}</Text>
       </View>
     </Pressable>
   );
 }
 
-function AddScreen({form, settings, domainSuggestions, updateForm, saveDeadline, onCancel}) {
+function AddScreen({form, settings, updateForm, saveDeadline, onCancel}) {
+  const {t} = useI18n();
   const isEditing = Boolean(form.id);
-  const presetIds = new Set(CATEGORY_OPTIONS.map(([id]) => id));
-  const categoryOptions = [
-    ['', 'Aucun'],
-    ...CATEGORY_OPTIONS,
-    ...domainSuggestions.filter(name => !presetIds.has(name)).map(name => [name, name]),
-  ];
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.formContent}>
-      <Text style={styles.pageTitle}>{isEditing ? 'Modifier l\'échéance' : 'Nouvelle échéance'}</Text>
+      <Text style={styles.pageTitle}>{isEditing ? t('editDeadline') : t('newDeadline')}</Text>
 
       <Input
-        label="Titre"
+        label={t('title')}
         value={form.title}
-        placeholder="Ex : Passeport, Loyer, Assurance..."
+        placeholder={t('titlePlaceholder')}
         onChangeText={value => updateForm('title', value)}
       />
       <DatePickerField
-        label="Date d'échéance"
+        label={t('dueDate')}
         value={form.dueDate}
         onChange={value => updateForm('dueDate', value)}
       />
 
-      <Dropdown
-        label="Type"
-        value={form.domain}
-        options={categoryOptions}
-        placeholder="Choisir (facultatif)"
-        onChange={value => updateForm('domain', value)}
-      />
-
       <Input
-        label="Note"
+        label={t('note')}
         value={form.note}
         multiline
-        placeholder="Facultatif"
+        placeholder={t('optional')}
         onChangeText={value => updateForm('note', value)}
       />
 
-      <Text style={styles.fieldLabel}>Se répète ?</Text>
+      <Text style={styles.fieldLabel}>{t('repeats')}</Text>
       <SegmentedControl
         value={form.repetition}
         options={[
-          ['none', 'Non'],
-          ['monthly', 'Mensuelle'],
-          ['yearly', 'Annuelle'],
+          ['none', t('no')],
+          ['monthly', t('monthly')],
+          ['yearly', t('yearly')],
         ]}
         onChange={value => updateForm('repetition', value)}
       />
@@ -1515,97 +1552,148 @@ function AddScreen({form, settings, domainSuggestions, updateForm, saveDeadline,
       />
 
       <PrimaryButton
-        label={isEditing ? 'Enregistrer les modifications' : 'Enregistrer'}
+        label={isEditing ? t('saveChanges') : t('save')}
         onPress={saveDeadline}
       />
       {isEditing ? (
         <Pressable style={styles.secondaryFullButton} onPress={onCancel}>
-          <Text style={styles.secondaryButtonText}>Annuler</Text>
+          <Text style={styles.secondaryButtonText}>{t('cancel')}</Text>
         </Pressable>
       ) : null}
     </ScrollView>
   );
 }
 
-function SettingsScreen({profile, settings, stats, deadlines, subscription, domainSuggestions, updateSettings, onSubscribe, onRefreshSubscription}) {
-  const priceLabel = `${SUBSCRIPTION_ANNUAL_FCFA.toLocaleString('fr-FR')} FCFA / an`;
+function SettingsScreen({
+  profile,
+  settings,
+  stats,
+  deadlines,
+  subscription,
+  updateSettings,
+  onSubscribe,
+  onRefreshSubscription,
+  onUpdateEmail,
+}) {
+  const {t, locale, language, setLanguage} = useI18n();
+  const priceLabel = t('pricePerYear', {price: SUBSCRIPTION_ANNUAL_FCFA.toLocaleString(locale)});
   const used = deadlines.length;
   const limit = subscription.isTrialActive ? TRIAL_DEADLINE_LIMIT : 0;
+  const needsEmail = isPlaceholderEmail(profile?.email);
+  const [emailDraft, setEmailDraft] = useState(needsEmail ? '' : (profile?.email || ''));
+  const [savingEmail, setSavingEmail] = useState(false);
+  const ages = ageRangeOptions(t);
+
+  useEffect(() => {
+    setEmailDraft(isPlaceholderEmail(profile?.email) ? '' : (profile?.email || ''));
+  }, [profile?.email]);
+
+  async function saveEmail() {
+    setSavingEmail(true);
+    try {
+      const ok = await onUpdateEmail?.(emailDraft);
+      if (ok) {
+        Alert.alert(t('profileSaved'), t('emailSaved'));
+      }
+    } finally {
+      setSavingEmail(false);
+    }
+  }
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.formContent}>
-      <Text style={styles.pageTitle}>Reglages</Text>
+      <Text style={styles.pageTitle}>{t('settings')}</Text>
 
       <View style={styles.settingsCard}>
-        <Text style={styles.settingsTitle}>Profil local</Text>
-        <Text style={styles.deadlineMeta}>{profile.name}</Text>
-        {profile.email ? <Text style={styles.deadlineMeta}>{profile.email}</Text> : null}
-        {profile.usageReason ? (
-          <Text style={styles.deadlineMeta}>
-            {labelForOption(USAGE_REASONS, profile.usageReason)}
-            {profile.ageRange ? ` · ${labelForOption(AGE_RANGES, profile.ageRange)}` : ''}
-          </Text>
+        <Text style={styles.settingsTitle}>{t('profile')}</Text>
+        <Text style={styles.settingsValue}>{profile.name}</Text>
+        {isValidEmail(profile?.email) ? (
+          <Text style={styles.deadlineMeta}>{profile.email}</Text>
+        ) : null}
+        {profile.ageRange ? (
+          <Text style={styles.deadlineMeta}>{labelForOption(ages, profile.ageRange)}</Text>
+        ) : null}
+        {needsEmail ? (
+          <>
+            <Input
+              label={t('emailOptional')}
+              value={emailDraft}
+              placeholder={t('emailPlaceholder')}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              onChangeText={setEmailDraft}
+            />
+            <Pressable
+              style={[styles.smallAction, savingEmail && styles.smallActionDisabled]}
+              onPress={saveEmail}
+              disabled={savingEmail}
+            >
+              <Text style={styles.smallActionText}>
+                {savingEmail ? t('saving') : t('saveEmail')}
+              </Text>
+            </Pressable>
+          </>
         ) : null}
       </View>
 
       <View style={styles.settingsCard}>
-        <Text style={styles.settingsTitle}>Abonnement</Text>
+        <Text style={styles.settingsTitle}>{t('subscription')}</Text>
         {subscription.isActive ? (
           <>
-            <Text style={styles.settingsValue}>Actif</Text>
+            <Text style={styles.settingsValue}>{t('active')}</Text>
             <Text style={styles.deadlineMeta}>
-              {subscription.daysLeft} jour{subscription.daysLeft > 1 ? 's' : ''} restant{subscription.daysLeft > 1 ? 's' : ''}
-              {subscription.endsAt ? ` · jusqu'au ${formatDate(subscription.endsAt.slice(0, 10))}` : ''}
+              {t('daysLeft', {count: subscription.daysLeft})}
+              {subscription.endsAt ? ` · ${t('until', {date: formatDate(subscription.endsAt.slice(0, 10), locale)})}` : ''}
             </Text>
-            <Text style={styles.deadlineMeta}>Echeances illimitees</Text>
+            <Text style={styles.deadlineMeta}>{t('unlimitedDeadlines')}</Text>
           </>
         ) : subscription.isTrialActive ? (
           <>
-            <Text style={styles.settingsValue}>Essai gratuit</Text>
+            <Text style={styles.settingsValue}>{t('freeTrial')}</Text>
             <Text style={styles.deadlineMeta}>
-              {subscription.trialDaysLeft} jour{subscription.trialDaysLeft > 1 ? 's' : ''} restant{subscription.trialDaysLeft > 1 ? 's' : ''}
+              {t('daysLeft', {count: subscription.trialDaysLeft})}
               {subscription.trialEndsAt
-                ? ` · jusqu'au ${formatDate(subscription.trialEndsAt.slice(0, 10))}`
+                ? ` · ${t('until', {date: formatDate(subscription.trialEndsAt.slice(0, 10), locale)})}`
                 : ''}
             </Text>
             <Text style={styles.deadlineMeta}>
-              Jusqu'a {TRIAL_DEADLINE_LIMIT} echeances · {used}/{TRIAL_DEADLINE_LIMIT} utilisee{used > 1 ? 's' : ''}
+              {t('trialUsage', {limit: TRIAL_DEADLINE_LIMIT, used})}
             </Text>
             <Text style={styles.deadlineMeta}>
-              Ensuite : abonnement {priceLabel} pour continuer sans limite.
+              {t('thenSubscribe', {price: priceLabel})}
             </Text>
             <Pressable style={styles.smallAction} onPress={onSubscribe}>
-              <Text style={styles.smallActionText}>S'abonner maintenant — {priceLabel}</Text>
+              <Text style={styles.smallActionText}>{t('subscribeNow', {price: priceLabel})}</Text>
             </Pressable>
           </>
         ) : (
           <>
-            <Text style={styles.settingsValue}>Essai termine</Text>
+            <Text style={styles.settingsValue}>{t('trialEnded')}</Text>
             <Text style={styles.deadlineMeta}>
-              Abonne-toi pour ajouter de nouvelles echeances ({priceLabel}).
+              {t('subscribeToAdd', {price: priceLabel})}
             </Text>
             <Text style={styles.deadlineMeta}>
-              {used} echeance{used > 1 ? 's' : ''} enregistree{used > 1 ? 's' : ''}
-              {limit === 0 ? ' · limite atteinte' : ''}
+              {t('deadlinesSaved', {count: used})}
+              {limit === 0 ? ` · ${t('limitReached')}` : ''}
             </Text>
             <Pressable style={styles.smallAction} onPress={onSubscribe}>
-              <Text style={styles.smallActionText}>S'abonner — {priceLabel}</Text>
+              <Text style={styles.smallActionText}>{t('subscribe', {price: priceLabel})}</Text>
             </Pressable>
           </>
         )}
         <Pressable style={styles.subscriptionRefresh} onPress={onRefreshSubscription}>
-          <Text style={styles.subscriptionRefreshText}>Actualiser le statut</Text>
+          <Text style={styles.subscriptionRefreshText}>{t('refreshStatus')}</Text>
         </Pressable>
       </View>
 
       <View style={styles.settingsCard}>
-        <Text style={styles.settingsTitle}>Notifications</Text>
+        <Text style={styles.settingsTitle}>{t('notifications')}</Text>
         <ToggleRow
-          label="Rappels locaux"
+          label={t('localReminders')}
           value={settings.notificationsEnabled}
           onChange={value => updateSettings({notificationsEnabled: value})}
         />
-        <Text style={styles.deadlineMeta}>Alertes sur ton telephone, sans Firebase.</Text>
+        <Text style={styles.deadlineMeta}>{t('localRemindersHint')}</Text>
 
         <ReminderPlanner
           compact
@@ -1618,53 +1706,49 @@ function SettingsScreen({profile, settings, stats, deadlines, subscription, doma
       </View>
 
       <View style={styles.settingsCard}>
-        <Text style={styles.settingsTitle}>Seuils automatiques</Text>
+        <Text style={styles.settingsTitle}>{t('autoThresholds')}</Text>
         <Stepper
-          label="Critique"
+          label={t('critical')}
           value={settings.criticalDays}
-          suffix="jours"
+          suffix={t('daysSuffix')}
           decrease={() => updateSettings({criticalDays: Math.max(1, settings.criticalDays - 1)})}
           increase={() => updateSettings({criticalDays: settings.criticalDays + 1})}
         />
         <Stepper
-          label="A surveiller"
+          label={t('watch')}
           value={settings.watchDays}
-          suffix="jours"
+          suffix={t('daysSuffix')}
           decrease={() => updateSettings({watchDays: Math.max(settings.criticalDays + 1, settings.watchDays - 1)})}
           increase={() => updateSettings({watchDays: settings.watchDays + 1})}
         />
       </View>
 
       <View style={styles.settingsCard}>
-        <Text style={styles.settingsTitle}>Donnees locales</Text>
+        <Text style={styles.settingsTitle}>{t('localData')}</Text>
         <Text style={styles.settingsValue}>{deadlines.length}</Text>
-        <Text style={styles.deadlineMeta}>echeances sur ce telephone</Text>
-        <Text style={styles.deadlineMeta}>{stats.upcoming} a venir · {stats.expired} depassees</Text>
+        <Text style={styles.deadlineMeta}>{t('deadlinesOnPhone')}</Text>
+        <Text style={styles.deadlineMeta}>
+          {t('upcomingExpired', {upcoming: stats.upcoming, expired: stats.expired})}
+        </Text>
       </View>
 
       <View style={styles.settingsCard}>
-        <Text style={styles.settingsTitle}>Types récents</Text>
-        <View style={styles.chipGrid}>
-          {domainSuggestions.length ? (
-            domainSuggestions.map(domain => (
-              <View key={domain} style={styles.chipMuted}>
-                <Text style={styles.chipText}>{domain}</Text>
-              </View>
-            ))
-          ) : (
-            <Text style={styles.deadlineMeta}>Ils apparaitront apres tes premieres saisies.</Text>
-          )}
-        </View>
+        <ToggleRow
+          label={t('english')}
+          value={language === 'en'}
+          onChange={enabled => setLanguage(enabled ? 'en' : 'fr')}
+        />
       </View>
     </ScrollView>
   );
 }
 
 function DeadlineModal({deadline, settings, close, onEdit, renewDeadline, deleteDeadline}) {
+  const {t, locale} = useI18n();
   if (!deadline) {
     return null;
   }
-  const status = statusFor(deadline, settings);
+  const status = statusFor(deadline, settings, t);
   const isRecurring = deadline.repetition !== 'none';
   const iconName = domainIconName(deadline.domain);
 
@@ -1701,8 +1785,8 @@ function DeadlineModal({deadline, settings, close, onEdit, renewDeadline, delete
 
           <View style={styles.modalDateRow}>
             <Ionicons name="calendar-outline" size={16} color="#94a3b8" />
-            <Text style={styles.modalDate}>{formatDate(deadline.dueDate)}</Text>
-            <Text style={styles.modalDistance}>{distanceLabel(deadline.dueDate)}</Text>
+            <Text style={styles.modalDate}>{formatDate(deadline.dueDate, locale)}</Text>
+            <Text style={styles.modalDistance}>{distanceLabel(deadline.dueDate, t)}</Text>
           </View>
 
           {deadline.note ? (
@@ -1714,11 +1798,11 @@ function DeadlineModal({deadline, settings, close, onEdit, renewDeadline, delete
           <View style={styles.modalMeta}>
             <View style={styles.modalMetaItem}>
               <Ionicons name="repeat-outline" size={14} color="#94a3b8" />
-              <Text style={styles.modalMetaText}>{repetitionLabel(deadline.repetition)}</Text>
+              <Text style={styles.modalMetaText}>{repetitionLabel(deadline.repetition, t)}</Text>
             </View>
             <View style={styles.modalMetaItem}>
               <Ionicons name="notifications-outline" size={14} color="#94a3b8" />
-              <Text style={styles.modalMetaText}>{remindersLabel(deadline)}</Text>
+              <Text style={styles.modalMetaText}>{remindersLabel(deadline, t)}</Text>
             </View>
           </View>
 
@@ -1726,20 +1810,20 @@ function DeadlineModal({deadline, settings, close, onEdit, renewDeadline, delete
             <Pressable style={styles.modalDoneButton} onPress={handleDone}>
               <Ionicons name="checkmark-circle-outline" size={20} color="#ffffff" />
               <Text style={styles.modalDoneText}>
-                {isRecurring ? 'Marquer comme fait — renouveler' : 'Marquer comme fait — archiver'}
+                {isRecurring ? t('markDoneRenew') : t('markDoneArchive')}
               </Text>
             </Pressable>
             <Pressable style={styles.modalEditButton} onPress={() => onEdit(deadline)}>
               <Ionicons name="create-outline" size={18} color="#2563EB" />
-              <Text style={styles.modalEditText}>Modifier</Text>
+              <Text style={styles.modalEditText}>{t('edit')}</Text>
             </Pressable>
             <View style={styles.modalSecondaryRow}>
               <Pressable style={styles.modalDeleteButton} onPress={() => deleteDeadline(deadline)}>
                 <Ionicons name="trash-outline" size={18} color="#dc2626" />
-                <Text style={styles.modalDeleteText}>Supprimer</Text>
+                <Text style={styles.modalDeleteText}>{t('delete')}</Text>
               </Pressable>
               <Pressable style={styles.modalCloseButton} onPress={close}>
-                <Text style={styles.modalCloseText}>Fermer</Text>
+                <Text style={styles.modalCloseText}>{t('close')}</Text>
               </Pressable>
             </View>
           </View>
@@ -1750,11 +1834,12 @@ function DeadlineModal({deadline, settings, close, onEdit, renewDeadline, delete
 }
 
 function SubscriptionPaywallModal({visible, subscription, loading, onClose, onSubscribe}) {
-  const priceLabel = `${SUBSCRIPTION_ANNUAL_FCFA.toLocaleString('fr-FR')} FCFA / an`;
-  const title = subscription?.isTrialActive ? 'Limite d\'essai atteinte' : 'Essai termine';
+  const {t, locale} = useI18n();
+  const priceLabel = t('pricePerYear', {price: SUBSCRIPTION_ANNUAL_FCFA.toLocaleString(locale)});
+  const title = subscription?.isTrialActive ? t('paywallTrialLimit') : t('paywallTrialEnded');
   const copy = subscription?.isTrialActive
-    ? `Pendant ton essai d'1 mois, tu peux creer jusqu'a ${TRIAL_DEADLINE_LIMIT} echeances. Abonne-toi pour en ajouter autant que tu veux.`
-    : `Ton essai d'1 mois est termine. Abonne-toi pour continuer a ajouter des echeances sans limite.`;
+    ? t('paywallTrialCopy', {limit: TRIAL_DEADLINE_LIMIT})
+    : t('paywallEndedCopy');
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -1767,19 +1852,19 @@ function SubscriptionPaywallModal({visible, subscription, loading, onClose, onSu
           <Text style={styles.paywallCopy}>{copy}</Text>
           {subscription?.isTrialActive && subscription?.trialDaysLeft != null ? (
             <Text style={styles.paywallPriceHint}>
-              Essai : encore {subscription.trialDaysLeft} jour{subscription.trialDaysLeft > 1 ? 's' : ''}
+              {t('trialDaysLeft', {count: subscription.trialDaysLeft})}
             </Text>
           ) : null}
           <View style={styles.paywallPriceBox}>
             <Text style={styles.paywallPrice}>{priceLabel}</Text>
-            <Text style={styles.paywallPriceHint}>Tu saisiras ton numero sur la page de paiement</Text>
+            <Text style={styles.paywallPriceHint}>{t('enterPhoneOnPayment')}</Text>
           </View>
           <PrimaryButton
-            label={loading ? 'Chargement...' : `S'abonner — ${priceLabel}`}
+            label={loading ? t('loadingDots') : t('subscribe', {price: priceLabel})}
             onPress={onSubscribe}
           />
           <Pressable style={styles.paywallClose} onPress={onClose}>
-            <Text style={styles.paywallCloseText}>Plus tard</Text>
+            <Text style={styles.paywallCloseText}>{t('later')}</Text>
           </Pressable>
         </View>
       </View>
@@ -1788,6 +1873,7 @@ function SubscriptionPaywallModal({visible, subscription, loading, onClose, onSu
 }
 
 function SubscriptionPaymentModal({paymentUrl, onClose, onComplete}) {
+  const {t} = useI18n();
   const [loading, setLoading] = useState(true);
   const handledRef = useRef(false);
 
@@ -1815,7 +1901,7 @@ function SubscriptionPaymentModal({paymentUrl, onClose, onComplete}) {
           <Pressable style={styles.paymentCloseBtn} onPress={() => finish(true)}>
             <Ionicons name="close" size={26} color="#0f172a" />
           </Pressable>
-          <Text style={styles.paymentHeaderTitle}>Paiement abonnement</Text>
+          <Text style={styles.paymentHeaderTitle}>{t('paymentHeader')}</Text>
           <View style={styles.paymentCloseBtn} />
         </View>
         <View style={styles.paymentWebviewWrap}>
@@ -1916,8 +2002,11 @@ async function ensureAppSettingsColumns(database) {
   if (!names.has('subscription_ends_at')) {
     await database.execAsync(`ALTER TABLE app_settings ADD COLUMN subscription_ends_at TEXT`);
   }
-  if (!names.has('trial_started_at')) {
+    if (!names.has('trial_started_at')) {
     await database.execAsync(`ALTER TABLE app_settings ADD COLUMN trial_started_at TEXT`);
+  }
+  if (!names.has('language')) {
+    await database.execAsync(`ALTER TABLE app_settings ADD COLUMN language TEXT NOT NULL DEFAULT 'fr'`);
   }
 }
 
@@ -2008,17 +2097,18 @@ function Dropdown({label, value, options, placeholder, onChange}) {
 }
 
 function TermsRow({accepted, onToggle}) {
+  const {t} = useI18n();
   return (
     <Pressable style={styles.termsRow} onPress={onToggle}>
       <View style={[styles.termsCheckbox, accepted && styles.termsCheckboxActive]}>
         {accepted ? <Text style={styles.termsCheckmark}>✓</Text> : null}
       </View>
-      <Text style={styles.termsText}>J'accepte les termes et conditions d'utilisation</Text>
+      <Text style={styles.termsText}>{t('acceptTerms')}</Text>
     </Pressable>
   );
 }
 
-function Input({label, value, onChangeText, placeholder, multiline}) {
+function Input({label, value, onChangeText, placeholder, multiline, keyboardType, autoCapitalize}) {
   return (
     <View style={styles.inputGroup}>
       <Text style={styles.fieldLabel}>{label}</Text>
@@ -2028,6 +2118,9 @@ function Input({label, value, onChangeText, placeholder, multiline}) {
         placeholder={placeholder}
         placeholderTextColor="#94a3b8"
         multiline={multiline}
+        keyboardType={keyboardType || 'default'}
+        autoCapitalize={autoCapitalize || (multiline ? 'sentences' : 'sentences')}
+        autoCorrect={false}
         onChangeText={onChangeText}
       />
     </View>
@@ -2035,6 +2128,7 @@ function Input({label, value, onChangeText, placeholder, multiline}) {
 }
 
 function DatePickerField({label, value, onChange}) {
+  const {t, locale} = useI18n();
   const [show, setShow] = useState(false);
   const [draftDate, setDraftDate] = useState(() => parseDate(value) || new Date());
 
@@ -2053,7 +2147,7 @@ function DatePickerField({label, value, onChange}) {
       <Text style={styles.fieldLabel}>{label}</Text>
       <Pressable style={styles.datePickerButton} onPress={() => setShow(true)}>
         <Text style={[styles.datePickerText, !value && styles.datePickerPlaceholder]}>
-          {value ? formatDate(value) : 'Choisir une date'}
+          {value ? formatDate(value, locale) : t('chooseDate')}
         </Text>
         <Ionicons name="calendar-outline" size={20} color="#64748b" />
       </Pressable>
@@ -2064,7 +2158,7 @@ function DatePickerField({label, value, onChange}) {
             <Pressable style={styles.datePickerSheet} onPress={event => event.stopPropagation()}>
               <View style={styles.datePickerToolbar}>
                 <Pressable onPress={() => setShow(false)}>
-                  <Text style={styles.datePickerCancel}>Annuler</Text>
+                  <Text style={styles.datePickerCancel}>{t('cancel')}</Text>
                 </Pressable>
                 <Pressable
                   onPress={() => {
@@ -2078,7 +2172,7 @@ function DatePickerField({label, value, onChange}) {
                 value={draftDate}
                 mode="date"
                 display="spinner"
-                locale="fr-FR"
+                locale={locale}
                 onChange={(event, date) => {
                   if (date) {
                     setDraftDate(date);
@@ -2095,6 +2189,7 @@ function DatePickerField({label, value, onChange}) {
           value={parseDate(value) || new Date()}
           mode="date"
           display="default"
+          locale={locale}
           onChange={(event, date) => {
             setShow(false);
             if (event.type !== 'dismissed' && date) {
@@ -2120,6 +2215,7 @@ function SegmentedControl({value, options, onChange}) {
 }
 
 function ReminderPlanner({offsets, hour, minute, onOffsetsChange, onTimeChange, compact}) {
+  const {t} = useI18n();
   const [showAddCustom, setShowAddCustom] = useState(false);
   const [newCustomDays, setNewCustomDays] = useState(2);
   const customOffsets = getCustomOffsets(offsets || []);
@@ -2155,15 +2251,15 @@ function ReminderPlanner({offsets, hour, minute, onOffsetsChange, onTimeChange, 
             <Ionicons name="notifications-outline" size={18} color={C.blue} />
           </View>
           <View>
-            <Text style={styles.reminderPlannerTitle}>Rappels</Text>
-            <Text style={styles.reminderPlannerHint}>Choisis l'heure et les moments qui te conviennent</Text>
+            <Text style={styles.reminderPlannerTitle}>{t('reminders')}</Text>
+            <Text style={styles.reminderPlannerHint}>{t('reminderHint')}</Text>
           </View>
         </View>
       ) : (
-        <Text style={styles.settingsSubtitle}>Preferences par defaut</Text>
+        <Text style={styles.settingsSubtitle}>{t('defaultPreferences')}</Text>
       )}
 
-      <Text style={styles.reminderSectionLabel}>A quelle heure ?</Text>
+      <Text style={styles.reminderSectionLabel}>{t('atWhatTime')}</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.timePillsRow}>
         {TIME_OPTIONS.map(option => {
           const active = isSameTime(option, hour, minute);
@@ -2178,7 +2274,7 @@ function ReminderPlanner({offsets, hour, minute, onOffsetsChange, onTimeChange, 
         })}
       </ScrollView>
 
-      <Text style={styles.reminderSectionLabel}>Me prevenir</Text>
+      <Text style={styles.reminderSectionLabel}>{t('notifyMe')}</Text>
       <View style={styles.reminderToggleList}>
         {REMINDER_PRESETS.map((preset, index) => (
           <View
@@ -2187,7 +2283,7 @@ function ReminderPlanner({offsets, hour, minute, onOffsetsChange, onTimeChange, 
               styles.reminderToggleRow,
               index === REMINDER_PRESETS.length - 1 && customOffsets.length === 0 && styles.reminderToggleRowLast,
             ]}>
-            <Text style={styles.reminderToggleLabel}>{preset.label}</Text>
+            <Text style={styles.reminderToggleLabel}>{t(preset.labelKey)}</Text>
             <Switch
               value={(offsets || []).includes(preset.days)}
               onValueChange={() => toggleOffset(preset.days)}
@@ -2201,7 +2297,7 @@ function ReminderPlanner({offsets, hour, minute, onOffsetsChange, onTimeChange, 
           <View
             key={`custom-${days}`}
             style={[styles.reminderToggleRow, index === customOffsets.length - 1 && styles.reminderToggleRowLast]}>
-            <Text style={styles.reminderToggleLabel}>{offsetLabel(days)}</Text>
+            <Text style={styles.reminderToggleLabel}>{offsetLabel(days, t)}</Text>
             <Pressable style={styles.reminderRemoveButton} onPress={() => removeOffset(days)}>
               <Ionicons name="close-circle" size={22} color="#94a3b8" />
             </Pressable>
@@ -2212,7 +2308,7 @@ function ReminderPlanner({offsets, hour, minute, onOffsetsChange, onTimeChange, 
       {showAddCustom ? (
         <View style={styles.reminderAddBox}>
           <Stepper
-            label="Jours avant l'echeance"
+            label={t('daysBeforeDue')}
             value={newCustomDays}
             suffix="j"
             decrease={() => setNewCustomDays(current => Math.max(0, current - 1))}
@@ -2220,17 +2316,17 @@ function ReminderPlanner({offsets, hour, minute, onOffsetsChange, onTimeChange, 
           />
           <View style={styles.reminderAddActions}>
             <Pressable style={styles.reminderAddCancel} onPress={() => setShowAddCustom(false)}>
-              <Text style={styles.reminderAddCancelText}>Annuler</Text>
+              <Text style={styles.reminderAddCancelText}>{t('cancel')}</Text>
             </Pressable>
             <Pressable style={styles.reminderAddConfirm} onPress={addCustomOffset}>
-              <Text style={styles.reminderAddConfirmText}>Ajouter</Text>
+              <Text style={styles.reminderAddConfirmText}>{t('add')}</Text>
             </Pressable>
           </View>
         </View>
       ) : (
         <Pressable style={styles.reminderAddButton} onPress={() => setShowAddCustom(true)}>
           <Ionicons name="add-circle-outline" size={18} color="#2563EB" />
-          <Text style={styles.reminderAddButtonText}>Ajouter un delai personnalise</Text>
+          <Text style={styles.reminderAddButtonText}>{t('addCustomReminder')}</Text>
         </Pressable>
       )}
     </View>
@@ -2302,6 +2398,7 @@ const styles = StyleSheet.create({
   accessLogo: {width: 106, height: 106, borderRadius: 10, alignSelf: 'center', marginBottom: 16},
   accessTitle: {color: '#0f172a', fontSize: 26, fontWeight: '900', textAlign: 'center'},
   accessCopy: {color: '#64748b', fontSize: 14, lineHeight: 20, marginTop: 8, marginBottom: 18, textAlign: 'center'},
+  accessHint: {color: '#64748b', fontSize: 12, marginTop: -8, marginBottom: 14, lineHeight: 16},
   trialBanner: {
     backgroundColor: '#EFF6FF',
     borderRadius: 14,
@@ -2589,6 +2686,8 @@ const styles = StyleSheet.create({
   settingsSubtitle: {color: '#64748b', fontSize: 12, fontWeight: '700', marginTop: 16, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.8},
   settingsValue: {color: '#2563EB', fontSize: 34, fontWeight: '800', marginTop: 8},
   smallAction: {alignSelf: 'flex-start', marginTop: 14, backgroundColor: '#eff6ff', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10},
+  smallActionDisabled: {opacity: 0.6},
+  settingsWarning: {color: '#b45309', fontSize: 13, marginTop: 8, marginBottom: 4, fontWeight: '600', lineHeight: 18},
   smallActionText: {color: '#2563EB', fontSize: 14, fontWeight: '700'},
   subscriptionRefresh: {marginTop: 12, alignSelf: 'flex-start'},
   subscriptionRefreshText: {color: '#64748b', fontSize: 13, fontWeight: '600'},
