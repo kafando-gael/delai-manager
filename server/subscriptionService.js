@@ -22,7 +22,9 @@ function checkoutPayload(paymentId, paymentUrl) {
 
 export async function reuseExistingCheckout(deviceId) {
   const latest = await getLatestPaymentForDevice(deviceId);
-  if (!latest || latest.status === 'completed') {
+  // Only reuse an in-flight checkout. Cancelled/failed rows often keep a dead
+  // Ligdicash invoice URL that 404s in the payment WebView.
+  if (!latest || latest.status !== 'pending') {
     return null;
   }
 
