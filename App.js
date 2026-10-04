@@ -64,8 +64,7 @@ const EMPTY_FORM = {
   note: '',
   repetition: 'none',
   reminderOffsets: [0, 1, 7],
-  reminderHour: 9,
-  reminderMinute: 0,
+  reminderTimes: [{hour: 9, minute: 0}],
 };
 
 const REMINDER_PRESETS = [
@@ -77,17 +76,10 @@ const REMINDER_PRESETS = [
   {days: 30, labelKey: 'reminder1Month'},
 ];
 
-const TIME_OPTIONS = [
-  {hour: 7, minute: 0, label: '07:00'},
-  {hour: 8, minute: 0, label: '08:00'},
-  {hour: 9, minute: 0, label: '09:00'},
-  {hour: 12, minute: 0, label: '12:00'},
-  {hour: 18, minute: 0, label: '18:00'},
-  {hour: 20, minute: 0, label: '20:00'},
-];
-
 const PRESET_OFFSET_DAYS = new Set(REMINDER_PRESETS.map(preset => preset.days));
 const DEFAULT_REMINDER_OFFSETS = [0, 1, 7];
+const DEFAULT_REMINDER_TIMES = [{hour: 9, minute: 0}];
+const MAX_REMINDER_TIMES = 5;
 
 const ONBOARDING_SLIDES = [
   {
@@ -264,9 +256,13 @@ function remindersLabel(item, t) {
   if (!offsets.length) {
     return t('remindersOff');
   }
-  const time = formatReminderTime(item.reminderHour ?? 9, item.reminderMinute ?? 0);
+  const times = normalizeReminderTimes(
+    item.reminderTimes,
+    item.reminderHour ?? 9,
+    item.reminderMinute ?? 0,
+  );
   return t('remindersSummary', {
-    time,
+    time: times.map(time => formatReminderTime(time.hour, time.minute)).join(', '),
     list: offsets.map(days => offsetLabel(days, t)).join(', '),
   });
 }
@@ -295,6 +291,41 @@ function offsetLabel(days, t) {
 
 function formatReminderTime(hour, minute) {
   return `${String(hour).padStart(2, '0')}h${String(minute).padStart(2, '0')}`;
+}
+
+function normalizeReminderTimes(times, fallbackHour = 9, fallbackMinute = 0) {
+  const source = Array.isArray(times) && times.length
+    ? times
+    : [{hour: fallbackHour, minute: fallbackMinute}];
+  const unique = new Map();
+  for (const item of source) {
+    const hour = Number(item?.hour);
+    const minute = Number(item?.minute);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+      continue;
+    }
+    const h = Math.max(0, Math.min(23, Math.round(hour)));
+    const m = Math.max(0, Math.min(59, Math.round(minute)));
+    unique.set(`${h}:${m}`, {hour: h, minute: m});
+  }
+  if (!unique.size) {
+    unique.set('9:0', {hour: 9, minute: 0});
+  }
+  return [...unique.values()].sort((a, b) => a.hour - b.hour || a.minute - b.minute);
+}
+
+function parseReminderTimes(value, row) {
+  if (value) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed) && parsed.length) {
+        return normalizeReminderTimes(parsed);
+      }
+    } catch {
+      // fall through
+    }
+  }
+  return normalizeReminderTimes(null, row?.reminder_hour ?? 9, row?.reminder_minute ?? 0);
 }
 
 function parseReminderOffsets(value, row) {
@@ -328,16 +359,15 @@ function getCustomOffsets(offsets) {
   return offsets.filter(days => !PRESET_OFFSET_DAYS.has(days));
 }
 
-function isSameTime(a, hour, minute) {
-  return a.hour === hour && a.minute === minute;
-}
-
 function defaultForm(settings) {
   return {
     ...EMPTY_FORM,
     reminderOffsets: [...(settings.defaultReminderOffsets || DEFAULT_REMINDER_OFFSETS)],
-    reminderHour: settings.defaultReminderHour ?? 9,
-    reminderMinute: settings.defaultReminderMinute ?? 0,
+    reminderTimes: normalizeReminderTimes(
+      settings.defaultReminderTimes,
+      settings.defaultReminderHour ?? 9,
+      settings.defaultReminderMinute ?? 0,
+    ),
   };
 }
 
@@ -350,8 +380,11 @@ function mapDeadlineToForm(deadline) {
     note: deadline.note || '',
     repetition: deadline.repetition || 'none',
     reminderOffsets: [...(deadline.reminderOffsets || DEFAULT_REMINDER_OFFSETS)],
-    reminderHour: deadline.reminderHour ?? 9,
-    reminderMinute: deadline.reminderMinute ?? 0,
+    reminderTimes: normalizeReminderTimes(
+      deadline.reminderTimes,
+      deadline.reminderHour ?? 9,
+      deadline.reminderMinute ?? 0,
+    ),
   };
 }
 
@@ -421,6 +454,7 @@ function groupDeadlinesForHome(deadlines, settings, t) {
 }
 
 function mapDeadline(row) {
+  const reminderTimes = parseReminderTimes(row.reminder_times, row);
   return {
     id: String(row.id),
     title: row.title,
@@ -429,8 +463,9 @@ function mapDeadline(row) {
     note: row.note || '',
     repetition: row.repetition,
     reminderOffsets: parseReminderOffsets(row.reminder_offsets, row),
-    reminderHour: row.reminder_hour ?? 9,
-    reminderMinute: row.reminder_minute ?? 0,
+    reminderTimes,
+    reminderHour: reminderTimes[0]?.hour ?? 9,
+    reminderMinute: reminderTimes[0]?.minute ?? 0,
   };
 }
 
@@ -447,6 +482,7 @@ export default function App() {
     defaultReminderHour: 9,
     defaultReminderMinute: 0,
     defaultReminderOffsets: [...DEFAULT_REMINDER_OFFSETS],
+    defaultReminderTimes: [...DEFAULT_REMINDER_TIMES],
     language: 'fr',
     strongAlertsEnabled: true,
   });
@@ -663,6 +699,10 @@ export default function App() {
       defaultReminderHour: settingsRow?.default_reminder_hour ?? 9,
       defaultReminderMinute: settingsRow?.default_reminder_minute ?? 0,
       defaultReminderOffsets: parseReminderOffsets(settingsRow?.default_reminder_offsets, null),
+      defaultReminderTimes: parseReminderTimes(settingsRow?.default_reminder_times, {
+        reminder_hour: settingsRow?.default_reminder_hour ?? 9,
+        reminder_minute: settingsRow?.default_reminder_minute ?? 0,
+      }),
       language: settingsRow?.language === 'en' ? 'en' : 'fr',
       strongAlertsEnabled: settingsRow?.strong_alerts !== 0,
     };
@@ -694,6 +734,9 @@ export default function App() {
   const language = settings.language === 'en' ? 'en' : 'fr';
   const locale = language === 'en' ? 'en-US' : 'fr-FR';
   const t = useMemo(() => (key, params) => translate(language, key, params), [language]);
+  const subscriptionPriceLabel = t('pricePerYear', {
+    price: SUBSCRIPTION_ANNUAL_FCFA.toLocaleString(locale),
+  });
 
   async function completeIntro() {
     await db.runAsync('UPDATE app_settings SET intro_completed = 1 WHERE id = 1');
@@ -776,14 +819,16 @@ export default function App() {
     }
 
     const offsets = form.reminderOffsets;
+    const times = normalizeReminderTimes(form.reminderTimes);
     const record = {
       title: form.title.trim(),
       domain: form.domain.trim(),
       dueDate: form.dueDate,
       note: form.note.trim(),
       repetition: form.repetition,
-      reminderHour: form.reminderHour,
-      reminderMinute: form.reminderMinute,
+      reminderHour: times[0].hour,
+      reminderMinute: times[0].minute,
+      reminderTimes: times,
     };
 
     let deadlineId = form.id;
@@ -792,7 +837,7 @@ export default function App() {
       await db.runAsync(
         `UPDATE deadlines
          SET title = ?, category = ?, due_date = ?, note = ?, repetition = ?,
-             reminder_offsets = ?, reminder_hour = ?, reminder_minute = ?
+             reminder_offsets = ?, reminder_hour = ?, reminder_minute = ?, reminder_times = ?
          WHERE id = ?`,
         record.title,
         record.domain,
@@ -802,13 +847,14 @@ export default function App() {
         JSON.stringify(offsets),
         record.reminderHour,
         record.reminderMinute,
+        JSON.stringify(times),
         form.id,
       );
     } else {
       const result = await db.runAsync(
         `INSERT INTO deadlines
-          (title, category, due_date, note, repetition, reminder_offsets, reminder_hour, reminder_minute)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          (title, category, due_date, note, repetition, reminder_offsets, reminder_hour, reminder_minute, reminder_times)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         record.title,
         record.domain,
         record.dueDate,
@@ -817,6 +863,7 @@ export default function App() {
         JSON.stringify(offsets),
         record.reminderHour,
         record.reminderMinute,
+        JSON.stringify(times),
       );
       deadlineId = String(result.lastInsertRowId);
     }
@@ -829,6 +876,7 @@ export default function App() {
           title: record.title,
           dueDate: record.dueDate,
           reminderOffsets: offsets,
+          reminderTimes: times,
           reminderHour: record.reminderHour,
           reminderMinute: record.reminderMinute,
         }, alertOptionsFromSettings(settings));
@@ -865,14 +913,19 @@ export default function App() {
       `UPDATE app_settings
        SET critical_days = ?, watch_days = ?, notifications_enabled = ?,
            default_reminder_hour = ?, default_reminder_minute = ?, default_reminder_offsets = ?,
-           language = ?, strong_alerts = ?
+           default_reminder_times = ?, language = ?, strong_alerts = ?
        WHERE id = 1`,
       next.criticalDays,
       next.watchDays,
       next.notificationsEnabled ? 1 : 0,
-      next.defaultReminderHour,
-      next.defaultReminderMinute,
+      next.defaultReminderTimes?.[0]?.hour ?? next.defaultReminderHour ?? 9,
+      next.defaultReminderTimes?.[0]?.minute ?? next.defaultReminderMinute ?? 0,
       JSON.stringify(next.defaultReminderOffsets),
+      JSON.stringify(normalizeReminderTimes(
+        next.defaultReminderTimes,
+        next.defaultReminderHour ?? 9,
+        next.defaultReminderMinute ?? 0,
+      )),
       next.language === 'en' ? 'en' : 'fr',
       next.strongAlertsEnabled === false ? 0 : 1,
     );
@@ -1144,6 +1197,7 @@ export default function App() {
               stats={stats}
               deadlines={deadlines}
               subscription={subscription}
+              priceLabel={subscriptionPriceLabel}
               updateSettings={updateSettings}
               onSubscribe={() => setShowPaywall(true)}
               onRefreshSubscription={() => syncSubscription()}
@@ -1178,6 +1232,7 @@ export default function App() {
         visible={showPaywall}
         subscription={subscription}
         loading={paymentLoading}
+        priceLabel={subscriptionPriceLabel}
         onClose={() => setShowPaywall(false)}
         onSubscribe={beginSubscriptionPayment}
       />
@@ -1247,9 +1302,8 @@ function AccessScreen(props) {
           <Image source={LOGO} style={styles.accessLogo} />
           <Text style={styles.accessTitle}>{t('welcomeTitle', {app: APP_NAME})}</Text>
           <Text style={styles.accessCopy}>{t('welcomeCopy')}</Text>
-          <View style={styles.trialBanner}>
-            <Text style={styles.trialBannerTitle}>{t('trialBannerTitle')}</Text>
-            <Text style={styles.trialBannerCopy}>
+          <View style={styles.trialChip}>
+            <Text style={styles.trialChipText}>
               {t('trialBannerCopy', {limit: TRIAL_DEADLINE_LIMIT})}
             </Text>
           </View>
@@ -1623,10 +1677,9 @@ function AddScreen({form, settings, updateForm, saveDeadline, onCancel}) {
 
       <ReminderPlanner
         offsets={form.reminderOffsets}
-        hour={form.reminderHour}
-        minute={form.reminderMinute}
+        times={form.reminderTimes}
         onOffsetsChange={offsets => updateForm('reminderOffsets', offsets)}
-        onTimeChange={(hour, minute) => updateForm({reminderHour: hour, reminderMinute: minute})}
+        onTimesChange={times => updateForm('reminderTimes', times)}
       />
 
       <PrimaryButton
@@ -1648,19 +1701,16 @@ function SettingsScreen({
   stats,
   deadlines,
   subscription,
+  priceLabel,
   updateSettings,
   onSubscribe,
-  onRefreshSubscription,
   onUpdateEmail,
 }) {
   const {t, locale, language, setLanguage} = useI18n();
-  const priceLabel = t('pricePerYear', {price: SUBSCRIPTION_ANNUAL_FCFA.toLocaleString(locale)});
   const used = deadlines.length;
-  const limit = subscription.isTrialActive ? TRIAL_DEADLINE_LIMIT : 0;
   const needsEmail = isPlaceholderEmail(profile?.email);
   const [emailDraft, setEmailDraft] = useState(needsEmail ? '' : (profile?.email || ''));
   const [savingEmail, setSavingEmail] = useState(false);
-  const ages = ageRangeOptions(t);
 
   useEffect(() => {
     setEmailDraft(isPlaceholderEmail(profile?.email) ? '' : (profile?.email || ''));
@@ -1683,14 +1733,19 @@ function SettingsScreen({
       <Text style={styles.pageTitle}>{t('settings')}</Text>
 
       <View style={styles.settingsCard}>
-        <Text style={styles.settingsTitle}>{t('profile')}</Text>
-        <Text style={styles.settingsValue}>{profile.name}</Text>
-        {isValidEmail(profile?.email) ? (
-          <Text style={styles.deadlineMeta}>{profile.email}</Text>
-        ) : null}
-        {profile.ageRange ? (
-          <Text style={styles.deadlineMeta}>{labelForOption(ages, profile.ageRange)}</Text>
-        ) : null}
+        <View style={styles.settingsPersonRow}>
+          <View style={styles.settingsAvatar}>
+            <Text style={styles.settingsAvatarText}>
+              {String(profile.name || '?').trim().charAt(0).toUpperCase()}
+            </Text>
+          </View>
+          <View style={styles.settingsPersonText}>
+            <Text style={styles.settingsName} numberOfLines={1}>{profile.name}</Text>
+            {isValidEmail(profile?.email) ? (
+              <Text style={styles.settingsLine} numberOfLines={1}>{profile.email}</Text>
+            ) : null}
+          </View>
+        </View>
         {needsEmail ? (
           <>
             <Input
@@ -1715,76 +1770,65 @@ function SettingsScreen({
       </View>
 
       <View style={styles.settingsCard}>
-        <Text style={styles.settingsTitle}>{t('subscription')}</Text>
         {subscription.isActive ? (
-          <>
-            <Text style={styles.settingsValue}>{t('active')}</Text>
-            <Text style={styles.deadlineMeta}>
-              {t('daysLeft', {count: subscription.daysLeft})}
-              {subscription.endsAt ? ` · ${t('until', {date: formatDate(subscription.endsAt.slice(0, 10), locale)})}` : ''}
-            </Text>
-            <Text style={styles.deadlineMeta}>{t('unlimitedDeadlines')}</Text>
-          </>
+          <View style={styles.settingsStatusRow}>
+            <View style={styles.settingsStatusText}>
+              <Text style={styles.settingsName}>{t('active')}</Text>
+              <Text style={styles.settingsLine}>
+                {t('daysLeft', {count: subscription.daysLeft})}
+                {subscription.endsAt ? ` · ${formatDate(subscription.endsAt.slice(0, 10), locale)}` : ''}
+              </Text>
+            </View>
+          </View>
         ) : subscription.isTrialActive ? (
-          <>
-            <Text style={styles.settingsValue}>{t('freeTrial')}</Text>
-            <Text style={styles.deadlineMeta}>
-              {t('daysLeft', {count: subscription.trialDaysLeft})}
-              {subscription.trialEndsAt
-                ? ` · ${t('until', {date: formatDate(subscription.trialEndsAt.slice(0, 10), locale)})}`
-                : ''}
-            </Text>
-            <Text style={styles.deadlineMeta}>
-              {t('trialUsage', {limit: TRIAL_DEADLINE_LIMIT, used})}
-            </Text>
-            <Text style={styles.deadlineMeta}>
-              {t('thenSubscribe', {price: priceLabel})}
-            </Text>
-            <Pressable style={styles.smallAction} onPress={onSubscribe}>
+          <View style={styles.settingsStatusRow}>
+            <View style={styles.settingsStatusText}>
+              <Text style={styles.settingsName}>{t('freeTrial')}</Text>
+              <Text style={styles.settingsLine}>
+                {t('trialLine', {
+                  days: subscription.trialDaysLeft,
+                  used,
+                  limit: TRIAL_DEADLINE_LIMIT,
+                })}
+              </Text>
+            </View>
+            <Pressable style={styles.smallActionTight} onPress={onSubscribe}>
               <Text style={styles.smallActionText}>{t('subscribeNow', {price: priceLabel})}</Text>
             </Pressable>
-          </>
+          </View>
         ) : (
-          <>
-            <Text style={styles.settingsValue}>{t('trialEnded')}</Text>
-            <Text style={styles.deadlineMeta}>
-              {t('subscribeToAdd', {price: priceLabel})}
-            </Text>
-            <Text style={styles.deadlineMeta}>
-              {t('deadlinesSaved', {count: used})}
-              {limit === 0 ? ` · ${t('limitReached')}` : ''}
-            </Text>
-            <Pressable style={styles.smallAction} onPress={onSubscribe}>
+          <View style={styles.settingsStatusRow}>
+            <View style={styles.settingsStatusText}>
+              <Text style={styles.settingsName}>{t('trialEnded')}</Text>
+              <Text style={styles.settingsLine}>{priceLabel}</Text>
+            </View>
+            <Pressable style={styles.smallActionTight} onPress={onSubscribe}>
               <Text style={styles.smallActionText}>{t('subscribe', {price: priceLabel})}</Text>
             </Pressable>
-          </>
+          </View>
         )}
-        <Pressable style={styles.subscriptionRefresh} onPress={onRefreshSubscription}>
-          <Text style={styles.subscriptionRefreshText}>{t('refreshStatus')}</Text>
-        </Pressable>
       </View>
 
       <View style={styles.settingsCard}>
-        <Text style={styles.settingsTitle}>{t('notifications')}</Text>
         <ToggleRow
-          label={t('localReminders')}
+          label={t('notifications')}
           value={settings.notificationsEnabled}
           onChange={value => updateSettings({notificationsEnabled: value})}
         />
-        <ToggleRow
-          label={t('strongAlerts')}
-          value={settings.strongAlertsEnabled !== false}
-          onChange={value => updateSettings({strongAlertsEnabled: value})}
-        />
 
-        <ReminderPlanner
-          compact
-          offsets={settings.defaultReminderOffsets}
-          hour={settings.defaultReminderHour}
-          minute={settings.defaultReminderMinute}
-          onOffsetsChange={offsets => updateSettings({defaultReminderOffsets: offsets})}
-          onTimeChange={(hour, minute) => updateSettings({defaultReminderHour: hour, defaultReminderMinute: minute})}
-        />
+        {settings.notificationsEnabled ? (
+          <ReminderPlanner
+            compact
+            offsets={settings.defaultReminderOffsets}
+            times={settings.defaultReminderTimes}
+            onOffsetsChange={offsets => updateSettings({defaultReminderOffsets: offsets})}
+            onTimesChange={times => updateSettings({
+              defaultReminderTimes: times,
+              defaultReminderHour: times[0]?.hour ?? 9,
+              defaultReminderMinute: times[0]?.minute ?? 0,
+            })}
+          />
+        ) : null}
       </View>
 
       <View style={styles.settingsCard}>
@@ -1806,10 +1850,8 @@ function SettingsScreen({
       </View>
 
       <View style={styles.settingsCard}>
-        <Text style={styles.settingsTitle}>{t('localData')}</Text>
-        <Text style={styles.settingsValue}>{deadlines.length}</Text>
-        <Text style={styles.deadlineMeta}>{t('deadlinesOnPhone')}</Text>
-        <Text style={styles.deadlineMeta}>
+        <Text style={styles.settingsName}>{deadlines.length} {t('deadlinesOnPhone')}</Text>
+        <Text style={styles.settingsLine}>
           {t('upcomingExpired', {upcoming: stats.upcoming, expired: stats.expired})}
         </Text>
       </View>
@@ -1915,9 +1957,15 @@ function DeadlineModal({deadline, settings, close, onEdit, renewDeadline, delete
   );
 }
 
-function SubscriptionPaywallModal({visible, subscription, loading, onClose, onSubscribe}) {
-  const {t, locale} = useI18n();
-  const priceLabel = t('pricePerYear', {price: SUBSCRIPTION_ANNUAL_FCFA.toLocaleString(locale)});
+function SubscriptionPaywallModal({
+  visible,
+  subscription,
+  loading,
+  priceLabel,
+  onClose,
+  onSubscribe,
+}) {
+  const {t} = useI18n();
   const title = subscription?.isTrialActive ? t('paywallTrialLimit') : t('paywallTrialEnded');
   const copy = subscription?.isTrialActive
     ? t('paywallTrialCopy', {limit: TRIAL_DEADLINE_LIMIT})
@@ -1944,8 +1992,9 @@ function SubscriptionPaywallModal({visible, subscription, loading, onClose, onSu
           <PrimaryButton
             label={loading ? t('loadingDots') : t('subscribe', {price: priceLabel})}
             onPress={onSubscribe}
+            disabled={loading}
           />
-          <Pressable style={styles.paywallClose} onPress={onClose}>
+          <Pressable style={styles.paywallClose} onPress={onClose} disabled={loading}>
             <Text style={styles.paywallCloseText}>{t('later')}</Text>
           </Pressable>
         </View>
@@ -2075,6 +2124,9 @@ async function ensureAppSettingsColumns(database) {
   if (!names.has('default_reminder_offsets')) {
     await database.execAsync(`ALTER TABLE app_settings ADD COLUMN default_reminder_offsets TEXT NOT NULL DEFAULT '[0,1,7]'`);
   }
+  if (!names.has('default_reminder_times')) {
+    await database.execAsync(`ALTER TABLE app_settings ADD COLUMN default_reminder_times TEXT NOT NULL DEFAULT '[{"hour":9,"minute":0}]'`);
+  }
   if (!names.has('device_id')) {
     await database.execAsync(`ALTER TABLE app_settings ADD COLUMN device_id TEXT`);
   }
@@ -2107,6 +2159,9 @@ async function ensureDeadlineColumns(database) {
   if (!names.has('reminder_minute')) {
     await database.execAsync(`ALTER TABLE deadlines ADD COLUMN reminder_minute INTEGER NOT NULL DEFAULT 0`);
   }
+  if (!names.has('reminder_times')) {
+    await database.execAsync(`ALTER TABLE deadlines ADD COLUMN reminder_times TEXT`);
+  }
 
   const rows = await database.getAllAsync('SELECT * FROM deadlines WHERE reminder_offsets IS NULL OR reminder_offsets = ""');
   for (const row of rows) {
@@ -2114,6 +2169,18 @@ async function ensureDeadlineColumns(database) {
     await database.runAsync(
       'UPDATE deadlines SET reminder_offsets = ?, reminder_hour = COALESCE(reminder_hour, 9), reminder_minute = COALESCE(reminder_minute, 0) WHERE id = ?',
       JSON.stringify(offsets),
+      row.id,
+    );
+  }
+
+  const missingTimes = await database.getAllAsync(
+    `SELECT * FROM deadlines WHERE reminder_times IS NULL OR reminder_times = ''`,
+  );
+  for (const row of missingTimes) {
+    const times = parseReminderTimes(null, row);
+    await database.runAsync(
+      'UPDATE deadlines SET reminder_times = ? WHERE id = ?',
+      JSON.stringify(times),
       row.id,
     );
   }
@@ -2299,11 +2366,45 @@ function SegmentedControl({value, options, onChange}) {
   );
 }
 
-function ReminderPlanner({offsets, hour, minute, onOffsetsChange, onTimeChange, compact}) {
-  const {t} = useI18n();
+function ReminderPlanner({offsets, times, onOffsetsChange, onTimesChange, compact}) {
+  const {t, locale} = useI18n();
   const [showAddCustom, setShowAddCustom] = useState(false);
   const [newCustomDays, setNewCustomDays] = useState(2);
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [editingTimeKey, setEditingTimeKey] = useState(null);
+  const [draftTime, setDraftTime] = useState(() => {
+    const date = new Date();
+    const first = (times && times[0]) || {hour: 9, minute: 0};
+    date.setHours(first.hour ?? 9, first.minute ?? 0, 0, 0);
+    return date;
+  });
   const customOffsets = getCustomOffsets(offsets || []);
+  const reminderTimes = normalizeReminderTimes(times);
+
+  useEffect(() => {
+    if (!showTimePicker) {
+      return;
+    }
+    const date = new Date();
+    if (editingTimeKey) {
+      const [h, m] = editingTimeKey.split(':').map(Number);
+      date.setHours(h, m, 0, 0);
+    } else {
+      const last = reminderTimes[reminderTimes.length - 1] || {hour: 9, minute: 0};
+      date.setHours(last.hour, last.minute, 0, 0);
+    }
+    setDraftTime(date);
+  }, [showTimePicker, editingTimeKey]);
+
+  function openAddTime() {
+    setEditingTimeKey(null);
+    setShowTimePicker(true);
+  }
+
+  function openEditTime(time) {
+    setEditingTimeKey(`${time.hour}:${time.minute}`);
+    setShowTimePicker(true);
+  }
 
   function toggleOffset(days) {
     const current = offsets || [];
@@ -2328,6 +2429,33 @@ function ReminderPlanner({offsets, hour, minute, onOffsetsChange, onTimeChange, 
     onOffsetsChange((offsets || []).filter(value => value !== days));
   }
 
+  function commitTime(date) {
+    if (!date) {
+      return;
+    }
+    const nextTime = {hour: date.getHours(), minute: date.getMinutes()};
+    if (editingTimeKey) {
+      const [oldHour, oldMinute] = editingTimeKey.split(':').map(Number);
+      const replaced = reminderTimes.map(time => (
+        time.hour === oldHour && time.minute === oldMinute ? nextTime : time
+      ));
+      onTimesChange(normalizeReminderTimes(replaced));
+      return;
+    }
+    const next = normalizeReminderTimes([...reminderTimes, nextTime]);
+    if (next.length > MAX_REMINDER_TIMES) {
+      return;
+    }
+    onTimesChange(next);
+  }
+
+  function removeReminderTime(hour, minute) {
+    if (reminderTimes.length <= 1) {
+      return;
+    }
+    onTimesChange(reminderTimes.filter(time => !(time.hour === hour && time.minute === minute)));
+  }
+
   return (
     <View style={[styles.reminderPlanner, compact && styles.reminderPlannerCompact]}>
       {!compact ? (
@@ -2341,23 +2469,82 @@ function ReminderPlanner({offsets, hour, minute, onOffsetsChange, onTimeChange, 
           </View>
         </View>
       ) : (
-        <Text style={styles.settingsSubtitle}>{t('defaultPreferences')}</Text>
+        <Text style={styles.settingsSubtitle}>{t('reminders')}</Text>
       )}
 
-      <Text style={styles.reminderSectionLabel}>{t('atWhatTime')}</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.timePillsRow}>
-        {TIME_OPTIONS.map(option => {
-          const active = isSameTime(option, hour, minute);
-          return (
-            <Pressable
-              key={option.label}
-              style={[styles.timePill, active && styles.timePillActive]}
-              onPress={() => onTimeChange(option.hour, option.minute)}>
-              <Text style={[styles.timePillText, active && styles.timePillTextActive]}>{option.label}</Text>
+      <Text style={styles.reminderSectionLabel}>{t('reminderTime')}</Text>
+      <View style={styles.reminderTimesList}>
+        {reminderTimes.map(time => (
+          <View key={`${time.hour}:${time.minute}`} style={styles.reminderTimeRow}>
+            <Pressable style={styles.reminderTimeChip} onPress={() => openEditTime(time)}>
+              <Ionicons name="time-outline" size={16} color="#2563EB" />
+              <Text style={[styles.timePillText, styles.timePillTextActive]}>
+                {formatReminderTime(time.hour, time.minute)}
+              </Text>
             </Pressable>
-          );
-        })}
-      </ScrollView>
+            {reminderTimes.length > 1 ? (
+              <Pressable style={styles.reminderRemoveButton} onPress={() => removeReminderTime(time.hour, time.minute)}>
+                <Ionicons name="close-circle" size={22} color="#94a3b8" />
+              </Pressable>
+            ) : null}
+          </View>
+        ))}
+      </View>
+      {reminderTimes.length < MAX_REMINDER_TIMES ? (
+        <Pressable style={styles.reminderAddTimeButton} onPress={openAddTime}>
+          <Ionicons name="add-circle-outline" size={18} color="#2563EB" />
+          <Text style={styles.reminderAddButtonText}>{t('addReminderTime')}</Text>
+        </Pressable>
+      ) : null}
+
+      {Platform.OS === 'ios' ? (
+        <Modal visible={showTimePicker} transparent animationType="fade" onRequestClose={() => setShowTimePicker(false)}>
+          <Pressable style={styles.datePickerBackdrop} onPress={() => setShowTimePicker(false)}>
+            <Pressable style={styles.datePickerSheet} onPress={event => event.stopPropagation()}>
+              <View style={styles.datePickerToolbar}>
+                <Pressable onPress={() => setShowTimePicker(false)}>
+                  <Text style={styles.datePickerCancel}>{t('cancel')}</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    commitTime(draftTime);
+                    setShowTimePicker(false);
+                  }}>
+                  <Text style={styles.datePickerDone}>OK</Text>
+                </Pressable>
+              </View>
+              <DateTimePicker
+                value={draftTime}
+                mode="time"
+                display="spinner"
+                locale={locale}
+                minuteInterval={5}
+                onChange={(event, date) => {
+                  if (date) {
+                    setDraftTime(date);
+                  }
+                }}
+              />
+            </Pressable>
+          </Pressable>
+        </Modal>
+      ) : null}
+
+      {Platform.OS === 'android' && showTimePicker ? (
+        <DateTimePicker
+          value={draftTime}
+          mode="time"
+          display="default"
+          locale={locale}
+          minuteInterval={5}
+          onChange={(event, date) => {
+            setShowTimePicker(false);
+            if (event.type !== 'dismissed' && date) {
+              commitTime(date);
+            }
+          }}
+        />
+      ) : null}
 
       <Text style={styles.reminderSectionLabel}>{t('notifyMe')}</Text>
       <View style={styles.reminderToggleList}>
@@ -2444,9 +2631,13 @@ function Stepper({label, value, suffix, decrease, increase}) {
   );
 }
 
-function PrimaryButton({label, onPress}) {
+function PrimaryButton({label, onPress, disabled}) {
   return (
-    <Pressable style={styles.primaryButton} onPress={onPress}>
+    <Pressable
+      style={[styles.primaryButton, disabled && styles.smallActionDisabled]}
+      onPress={onPress}
+      disabled={disabled}
+    >
       <Text style={styles.primaryButtonText}>{label}</Text>
     </Pressable>
   );
@@ -2484,16 +2675,15 @@ const styles = StyleSheet.create({
   accessTitle: {color: '#0f172a', fontSize: 26, fontWeight: '900', textAlign: 'center'},
   accessCopy: {color: '#64748b', fontSize: 14, lineHeight: 20, marginTop: 8, marginBottom: 18, textAlign: 'center'},
   accessHint: {color: '#64748b', fontSize: 12, marginTop: -8, marginBottom: 14, lineHeight: 16},
-  trialBanner: {
-    backgroundColor: '#EFF6FF',
-    borderRadius: 14,
-    padding: 14,
+  trialChip: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#eff6ff',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     marginBottom: 18,
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
   },
-  trialBannerTitle: {color: '#1D4ED8', fontSize: 15, fontWeight: '800', marginBottom: 4},
-  trialBannerCopy: {color: '#334155', fontSize: 13, lineHeight: 19},
+  trialChipText: {color: '#2563EB', fontSize: 13, fontWeight: '700'},
   dropdown: {
     minHeight: 48,
     borderWidth: 1,
@@ -2766,11 +2956,27 @@ const styles = StyleSheet.create({
   monthTitle: {color: '#94a3b8', fontSize: 13, fontWeight: '800', textTransform: 'capitalize', marginBottom: 10},
   softCard: {backgroundColor: '#FFFFFF', borderRadius: 14, padding: 18, marginBottom: 12, shadowColor: '#0f172a', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: {width: 0, height: 2}, elevation: 1},
   emptyText: {color: '#94a3b8', fontSize: 15, backgroundColor: '#FFFFFF', borderRadius: 14, padding: 20, fontWeight: '500', textAlign: 'center'},
-  settingsCard: {backgroundColor: '#FFFFFF', borderRadius: 14, padding: 20, marginBottom: 14, shadowColor: '#0f172a', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: {width: 0, height: 2}, elevation: 1},
+  settingsCard: {backgroundColor: '#FFFFFF', borderRadius: 14, padding: 14, marginBottom: 12},
   settingsTitle: {color: '#0f172a', fontSize: 16, fontWeight: '700'},
-  settingsSubtitle: {color: '#64748b', fontSize: 12, fontWeight: '700', marginTop: 16, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.8},
-  settingsValue: {color: '#2563EB', fontSize: 34, fontWeight: '800', marginTop: 8},
-  smallAction: {alignSelf: 'flex-start', marginTop: 14, backgroundColor: '#eff6ff', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10},
+  settingsSubtitle: {color: '#64748b', fontSize: 12, fontWeight: '700', marginTop: 12, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.8},
+  settingsValue: {color: '#2563EB', fontSize: 22, fontWeight: '800', marginTop: 4},
+  settingsPersonRow: {flexDirection: 'row', alignItems: 'center', gap: 12},
+  settingsAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#eff6ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  settingsAvatarText: {color: '#2563EB', fontSize: 16, fontWeight: '800'},
+  settingsPersonText: {flex: 1},
+  settingsName: {color: '#0f172a', fontSize: 16, fontWeight: '700'},
+  settingsLine: {color: '#64748b', fontSize: 13, marginTop: 2, fontWeight: '500'},
+  settingsStatusRow: {flexDirection: 'row', alignItems: 'center', gap: 10},
+  settingsStatusText: {flex: 1},
+  smallAction: {alignSelf: 'flex-start', marginTop: 12, backgroundColor: '#eff6ff', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8},
+  smallActionTight: {backgroundColor: '#eff6ff', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, maxWidth: '48%'},
   smallActionDisabled: {opacity: 0.6},
   settingsWarning: {color: '#b45309', fontSize: 13, marginTop: 8, marginBottom: 4, fontWeight: '600', lineHeight: 18},
   smallActionText: {color: '#2563EB', fontSize: 14, fontWeight: '700'},
@@ -2997,17 +3203,40 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
-  timePillsRow: {flexDirection: 'row', gap: 8, paddingBottom: 4, marginBottom: 18},
-  timePill: {
-    borderRadius: 999,
-    backgroundColor: '#f1f5f9',
+  timePickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 8,
+    borderRadius: 12,
+    backgroundColor: '#eff6ff',
     paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderWidth: 1.5,
+    borderColor: '#2563EB',
+    marginBottom: 18,
+  },
+  reminderTimesList: {gap: 8, marginBottom: 10},
+  reminderTimeRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'},
+  reminderTimeChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 12,
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 14,
     paddingVertical: 10,
     borderWidth: 1.5,
-    borderColor: '#e2e8f0',
+    borderColor: '#2563EB',
   },
-  timePillActive: {backgroundColor: '#eff6ff', borderColor: '#2563EB'},
-  timePillText: {color: '#64748b', fontSize: 14, fontWeight: '700'},
+  reminderAddTimeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 18,
+    paddingVertical: 4,
+  },
+  timePillText: {color: '#64748b', fontSize: 16, fontWeight: '700'},
   timePillTextActive: {color: '#2563EB'},
   reminderToggleList: {
     backgroundColor: '#f8fafc',

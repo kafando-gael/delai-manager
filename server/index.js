@@ -23,7 +23,7 @@ const app = express();
 
 app.set('trust proxy', 1);
 app.use(helmet());
-app.use(express.json({limit: '32kb'}));
+app.use(express.json({limit: '256kb'}));
 
 const corsOptions = config.isProduction && config.corsOrigins.length > 0
   ? {origin: config.corsOrigins}

@@ -18,6 +18,8 @@ export const NOTIF_ACTIONS = {
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
   }),
@@ -34,12 +36,40 @@ function parseDueDate(value) {
     : null;
 }
 
-function notificationId(deadlineId, daysBefore) {
-  return `deadline-${deadlineId}-offset-${daysBefore}`;
+function notificationId(deadlineId, daysBefore, hour = 9, minute = 0) {
+  return `deadline-${deadlineId}-offset-${daysBefore}-t-${hour}-${minute}`;
 }
 
-function nudgeId(deadlineId, daysBefore, index) {
-  return `deadline-${deadlineId}-offset-${daysBefore}-nudge-${index}`;
+function nudgeId(deadlineId, daysBefore, hour, minute, index) {
+  return `deadline-${deadlineId}-offset-${daysBefore}-t-${hour}-${minute}-nudge-${index}`;
+}
+
+function normalizeReminderTimes(times, fallbackHour = 9, fallbackMinute = 0) {
+  const source = Array.isArray(times) && times.length
+    ? times
+    : [{hour: fallbackHour, minute: fallbackMinute}];
+  const unique = new Map();
+  for (const item of source) {
+    const hour = Number(item?.hour);
+    const minute = Number(item?.minute);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+      continue;
+    }
+    const h = Math.max(0, Math.min(23, Math.round(hour)));
+    const m = Math.max(0, Math.min(59, Math.round(minute)));
+    unique.set(`${h}:${m}`, {hour: h, minute: m});
+  }
+  if (!unique.size) {
+    unique.set('9:0', {hour: 9, minute: 0});
+  }
+  return [...unique.values()].sort((a, b) => a.hour - b.hour || a.minute - b.minute);
+}
+
+function reminderTimesFromDeadline(deadline) {
+  if (Array.isArray(deadline?.reminderTimes) && deadline.reminderTimes.length) {
+    return normalizeReminderTimes(deadline.reminderTimes);
+  }
+  return normalizeReminderTimes(null, deadline?.reminderHour ?? 9, deadline?.reminderMinute ?? 0);
 }
 
 function reminderDate(dueDateStr, daysBefore, hour, minute) {
@@ -162,45 +192,46 @@ async function scheduleOne({id, title, body, date, urgent, data}) {
 export async function scheduleDeadlineNotifications(deadline, alertOptions = {}) {
   await cancelDeadlineNotifications(deadline.id);
 
-  const {id, title, dueDate, reminderOffsets, reminderHour, reminderMinute} = deadline;
+  const {id, title, dueDate, reminderOffsets} = deadline;
   const idStr = String(id);
-  const hour = reminderHour ?? 9;
-  const minute = reminderMinute ?? 0;
+  const times = reminderTimesFromDeadline(deadline);
   const offsets = Array.isArray(reminderOffsets) ? reminderOffsets : [];
   const language = alertOptions.language === 'en' ? 'en' : 'fr';
   const criticalDays = alertOptions.criticalDays ?? 3;
   const strongAlertsEnabled = alertOptions.strongAlertsEnabled !== false;
 
   for (const daysBefore of offsets) {
-    const date = reminderDate(dueDate, daysBefore, hour, minute);
     const urgent = isUrgentReminder(daysBefore, criticalDays, strongAlertsEnabled);
     const heading = urgent
       ? translate(language, 'notifUrgentTitle')
       : reminderTitle(daysBefore, language);
     const data = {deadlineId: idStr, daysBefore, urgent: urgent ? 1 : 0};
 
-    await scheduleOne({
-      id: notificationId(idStr, daysBefore),
-      title: heading,
-      body: title,
-      date,
-      urgent,
-      data,
-    });
-
-    if (!urgent || !date) {
-      continue;
-    }
-    for (let index = 0; index < NUDGE_DELAYS_MS.length; index++) {
-      const nudgeDate = new Date(date.getTime() + NUDGE_DELAYS_MS[index]);
+    for (const {hour, minute} of times) {
+      const date = reminderDate(dueDate, daysBefore, hour, minute);
       await scheduleOne({
-        id: nudgeId(idStr, daysBefore, index + 1),
-        title: translate(language, 'notifUrgentNudge'),
+        id: notificationId(idStr, daysBefore, hour, minute),
+        title: heading,
         body: title,
-        date: nudgeDate,
-        urgent: true,
+        date,
+        urgent,
         data,
       });
+
+      if (!urgent || !date) {
+        continue;
+      }
+      for (let index = 0; index < NUDGE_DELAYS_MS.length; index++) {
+        const nudgeDate = new Date(date.getTime() + NUDGE_DELAYS_MS[index]);
+        await scheduleOne({
+          id: nudgeId(idStr, daysBefore, hour, minute, index + 1),
+          title: translate(language, 'notifUrgentNudge'),
+          body: title,
+          date: nudgeDate,
+          urgent: true,
+          data,
+        });
+      }
     }
   }
 }
@@ -231,16 +262,19 @@ export async function syncAllDeadlineNotifications(deadlines, enabled, alertOpti
   const expectedIds = new Set();
   for (const deadline of deadlines) {
     const offsets = Array.isArray(deadline.reminderOffsets) ? deadline.reminderOffsets : [];
+    const times = reminderTimesFromDeadline(deadline);
     for (const daysBefore of offsets) {
-      expectedIds.add(notificationId(deadline.id, daysBefore));
       const urgent = isUrgentReminder(
         daysBefore,
         alertOptions.criticalDays ?? 3,
         alertOptions.strongAlertsEnabled !== false,
       );
-      if (urgent) {
-        expectedIds.add(nudgeId(deadline.id, daysBefore, 1));
-        expectedIds.add(nudgeId(deadline.id, daysBefore, 2));
+      for (const {hour, minute} of times) {
+        expectedIds.add(notificationId(deadline.id, daysBefore, hour, minute));
+        if (urgent) {
+          expectedIds.add(nudgeId(deadline.id, daysBefore, hour, minute, 1));
+          expectedIds.add(nudgeId(deadline.id, daysBefore, hour, minute, 2));
+        }
       }
     }
   }

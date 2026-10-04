@@ -6,11 +6,6 @@
     "version": "0.0.1",
     "orientation": "portrait",
     "icon": "./assets/app-logo.png",
-    "splash": {
-      "image": "./assets/app-logo.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#F8FAFC"
-    },
     "scheme": "delai-manager",
     "extra": {
       "apiUrl": "https://delai-manager.onrender.com/api",
@@ -23,9 +18,23 @@
         "expo-notifications",
         {
           "color": "#2563EB",
-          "sounds": ["./assets/sounds/urgent.wav"]
+          "sounds": [
+            "./assets/sounds/urgent.wav"
+          ]
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/app-logo.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#F8FAFC",
+          "imageWidth": 200
+        }
+      ],
+      "expo-sqlite",
+      "expo-font"
     ],
     "ios": {
       "bundleIdentifier": "com.delaimanager.app",
